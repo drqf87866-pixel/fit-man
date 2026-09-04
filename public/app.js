@@ -448,9 +448,16 @@
         <main class="px-3 pt-4 pb-40">
           ${
             imageOf(e)
-              ? `<img src="/img/exercises/${esc(imageOf(e))}.jpg" alt="" decoding="async"
-                      onerror="this.remove()"
-                      width="850" height="567" class="mb-3 h-48 w-full rounded-2xl bg-surface-2 object-cover">`
+              ? // Detailseite in neuem Tab – das laufende Workout soll nicht verlassen werden.
+                `<a href="/exercises/${esc(e.exerciseId)}" target="_blank" rel="noopener"
+                     class="relative mb-3 block" aria-label="Übungsdetails öffnen">
+                   <img src="/img/exercises/${esc(imageOf(e))}.jpg" alt="" decoding="async"
+                        onerror="this.closest('a').remove()"
+                        width="850" height="567" class="h-48 w-full rounded-2xl bg-surface-2 object-cover">
+                   <span class="absolute right-2 bottom-2 rounded-lg bg-black/60 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm">
+                     Details
+                   </span>
+                 </a>`
               : ''
           }
           <div class="mb-3 flex items-start gap-3 px-1">

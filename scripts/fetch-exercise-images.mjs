@@ -4,7 +4,9 @@
  *   npm run fetch:images
  *
  * Quelle: https://github.com/yuhonas/free-exercise-db (Unlicense / Public Domain).
- * Es wird jeweils nur Bild 0 (Startposition) geholt und unter dem Slug abgelegt.
+ * Je Übung werden beide Bilder geholt:
+ *   <slug>.jpg      Startposition (Listen, Workout-Header)
+ *   <slug>_end.jpg  Endposition   (nur Detailseite)
  * Bereits vorhandene Dateien werden übersprungen – die Bilder liegen im Repo und
  * werden über das ASSETS-Binding ausgeliefert.
  *
@@ -23,7 +25,7 @@ const BASE = 'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/ex
 async function slugsFromSeed() {
   const sql = await readFile(join(ROOT, 'seed.sql'), 'utf8');
   const slugs = new Set();
-  for (const m of sql.matchAll(/,\s*'([A-Za-z0-9_.\-]+)'\s*\)/g)) slugs.add(m[1]);
+  for (const m of sql.matchAll(/,\s*'([A-Za-z0-9_.\-]+)',\s*$/gm)) slugs.add(m[1]);
   return [...slugs].sort();
 }
 
@@ -41,22 +43,31 @@ let downloaded = 0;
 let skipped = 0;
 const failed = [];
 
+/** Bild 0 = Startposition, Bild 1 = Endposition. */
+const VARIANTS = [
+  { index: 0, suffix: '' },
+  { index: 1, suffix: '_end' },
+];
+
 for (const slug of slugs) {
-  const target = join(OUT_DIR, `${slug}.jpg`);
-  if (await exists(target)) {
-    skipped++;
-    continue;
-  }
-  const url = `${BASE}/${encodeURIComponent(slug)}/0.jpg`;
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await writeFile(target, Buffer.from(await res.arrayBuffer()));
-    downloaded++;
-    console.log(`✓ ${slug}`);
-  } catch (err) {
-    failed.push(`${slug}: ${err.message}`);
-    console.error(`✗ ${slug} – ${err.message}`);
+  for (const { index, suffix } of VARIANTS) {
+    const file = `${slug}${suffix}.jpg`;
+    const target = join(OUT_DIR, file);
+    if (await exists(target)) {
+      skipped++;
+      continue;
+    }
+    const url = `${BASE}/${encodeURIComponent(slug)}/${index}.jpg`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await writeFile(target, Buffer.from(await res.arrayBuffer()));
+      downloaded++;
+      console.log(`✓ ${file}`);
+    } catch (err) {
+      failed.push(`${file}: ${err.message}`);
+      console.error(`✗ ${file} – ${err.message}`);
+    }
   }
 }
 

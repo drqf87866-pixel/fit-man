@@ -24,6 +24,7 @@ Frontend und Backend laufen im selben Worker: Hono rendert die Seiten serverseit
 | `/plans/:id`       | Plandetail, „Training starten", Plan löschen                        |
 | `/workout/active`  | Aktiver Tracker: Sätze, Vorwerte, Rest-Timer, Workout beenden        |
 | `/exercises`       | Übungsbibliothek: Suche, Kategoriefilter, eigene Übungen             |
+| `/exercises/:id`   | Übungsdetail: Start-/Endposition, Erklärung, Zielmuskel und Tags     |
 | `/history`         | Verlauf mit Kennzahlen                                               |
 | `/history/:id`     | Detailansicht eines Workouts (alle Sätze, Gewichte, Wiederholungen)  |
 
@@ -47,12 +48,30 @@ Bottom-Navigation (fix, `env(safe-area-inset-bottom)`-bewusst): **Training ·
 
 ---
 
+## Übungsbilder
+
+Jede Standard-Übung hat zwei Fotos aus [free-exercise-db](https://github.com/yuhonas/free-exercise-db)
+(Unlicense / Public Domain). Die Spalte `exercises.image` enthält nur den Slug,
+die Dateien liegen unter `public/img/exercises/`:
+
+```
+<slug>.jpg       Startposition – Listen, Plandetail, Workout-Header
+<slug>_end.jpg   Endposition   – nur auf der Detailseite
+```
+
+Ausgeliefert werden sie über das `ASSETS`-Binding, also ohne externe Domain zur
+Laufzeit und damit auch als PWA offline verfügbar. Nachladen (idempotent, liest
+die Slugs aus `seed.sql`): `npm run fetch:images`. Eigene Übungen haben keinen
+Slug und fallen auf die Icon-Kachel zurück.
+
+---
+
 ## Datenmodell
 
 `src/db/schema.ts` — Migration in `drizzle/0000_init.sql`.
 
 ```
-exercises       id · name · category · target_muscle · is_custom
+exercises       id · name · category · target_muscle · movement · equipment · image · description · is_custom
 workout_plans   id · name · description · created_at
 plan_exercises  id · plan_id → workout_plans · exercise_id → exercises · sort_order · target_sets
 workout_logs    id · plan_id → workout_plans (nullable) · plan_name · date · duration_seconds · notes
@@ -148,6 +167,7 @@ Deploy-Status prüfen: `npx wrangler deployments list`
 | `npm run watch:css`         | Tailwind im Watch-Modus                                     |
 | `npm run build:css`         | `src/styles/app.css` → `public/styles.css` (minified)       |
 | `npm run db:generate`       | Drizzle-Migration aus `schema.ts` erzeugen                  |
+| `npm run fetch:images`      | Übungsbilder nach `public/img/exercises/` laden (einmalig)  |
 | `npm run db:migrate:local`  | Migrationen auf die lokale D1 anwenden                      |
 | `npm run db:migrate:remote` | Migrationen auf die Remote-D1 anwenden                      |
 | `npm run db:seed:local`     | `seed.sql` lokal einspielen (idempotent)                    |

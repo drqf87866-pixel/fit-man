@@ -1,0 +1,1 @@
+ALTER TABLE `exercises` ADD `description` text DEFAULT '' NOT NULL;

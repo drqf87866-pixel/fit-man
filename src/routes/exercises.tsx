@@ -73,12 +73,14 @@ app.get('/exercises', async (c) => {
             data-custom={ex.isCustom ? '1' : '0'}
             data-search={`${ex.name} ${ex.targetMuscle} ${ex.category} ${MOVEMENT_LABELS[ex.movement] ?? ''} ${EQUIPMENT_LABELS[ex.equipment] ?? ''}`.toLowerCase()}
           >
-            <ExerciseThumb image={ex.image} category={ex.category} class="size-10 rounded-xl" />
-            <div class="min-w-0 flex-1">
-              <p class="truncate font-semibold">{ex.name}</p>
-              <p class="truncate text-xs text-muted">{ex.targetMuscle || '—'}</p>
-              <TagBadges movement={ex.movement} equipment={ex.equipment} />
-            </div>
+            <a href={`/exercises/${ex.id}`} class="flex min-w-0 flex-1 items-center gap-3">
+              <ExerciseThumb image={ex.image} category={ex.category} class="size-10 rounded-xl" />
+              <div class="min-w-0 flex-1">
+                <p class="truncate font-semibold">{ex.name}</p>
+                <p class="truncate text-xs text-muted">{ex.targetMuscle || '—'}</p>
+                <TagBadges movement={ex.movement} equipment={ex.equipment} />
+              </div>
+            </a>
             <CategoryBadge category={ex.category} custom={ex.isCustom} />
             {ex.isCustom ? (
               <form
@@ -188,6 +190,20 @@ app.get('/exercises', async (c) => {
               />
             </div>
 
+            <div>
+              <label class="label" for="ex-description">
+                Beschreibung (optional)
+              </label>
+              <textarea
+                class="input min-h-24 py-2"
+                id="ex-description"
+                name="description"
+                maxlength={600}
+                rows={3}
+                placeholder="Kurze Erklärung zur Ausführung"
+              ></textarea>
+            </div>
+
             <button type="submit" class="btn-primary w-full">
               <Icon name="check" size={20} />
               Übung speichern
@@ -199,6 +215,87 @@ app.get('/exercises', async (c) => {
   );
 });
 
+// ---------------------------------------------------------------------------
+// Übungsdetail  (/exercises/:id)
+// ---------------------------------------------------------------------------
+app.get('/exercises/:id', async (c) => {
+  const db = createDb(c.env.DB);
+  const id = c.req.param('id');
+  const [ex] = await db.select().from(exercises).where(eq(exercises.id, id)).limit(1);
+  if (!ex) return c.notFound();
+
+  // Zurück dorthin, wo der Aufruf herkam (Bibliothek oder Plan-Detail).
+  // Nur repo-interne Pfade zulassen, damit der Link nicht nach außen zeigt.
+  const fromRaw = c.req.query('from') ?? '';
+  const back = fromRaw.startsWith('/') && !fromRaw.startsWith('//') ? fromRaw : '/exercises';
+
+  return c.html(
+    <Layout title={ex.name} active="exercises">
+      <PageHeader title={ex.name} subtitle={ex.category} back={back} />
+
+      {ex.image ? (
+        <div class="grid grid-cols-2 gap-2 px-4 pt-4">
+          {[
+            { src: `/img/exercises/${ex.image}.jpg`, label: 'Startposition' },
+            { src: `/img/exercises/${ex.image}_end.jpg`, label: 'Endposition' },
+          ].map((img) => (
+            <figure class="m-0">
+              <img
+                src={img.src}
+                alt={`${ex.name} – ${img.label}`}
+                decoding="async"
+                width="850"
+                height="567"
+                class="aspect-[3/2] w-full rounded-xl bg-surface-2 object-cover"
+              />
+              <figcaption class="mt-1 text-center text-[11px] font-semibold tracking-wide text-muted uppercase">
+                {img.label}
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      ) : null}
+
+      {ex.description ? (
+        <section class="px-4 pt-5">
+          <h2 class="mb-2 text-sm font-semibold tracking-wide text-muted uppercase">Ausführung</h2>
+          <p class="text-[15px] leading-relaxed">{ex.description}</p>
+        </section>
+      ) : null}
+
+      <section class="px-4 pt-5">
+        <h2 class="mb-2 text-sm font-semibold tracking-wide text-muted uppercase">Details</h2>
+        <dl class="card flex flex-col gap-2 !p-4 text-sm">
+          <div class="flex items-baseline justify-between gap-3">
+            <dt class="text-muted">Kategorie</dt>
+            <dd class="text-right font-semibold">{ex.category}</dd>
+          </div>
+          <div class="flex items-baseline justify-between gap-3">
+            <dt class="text-muted">Zielmuskel</dt>
+            <dd class="text-right font-semibold">{ex.targetMuscle || '—'}</dd>
+          </div>
+          <div class="flex items-baseline justify-between gap-3">
+            <dt class="text-muted">Bewegung</dt>
+            <dd class="text-right font-semibold">{MOVEMENT_LABELS[ex.movement] ?? '—'}</dd>
+          </div>
+          <div class="flex items-baseline justify-between gap-3">
+            <dt class="text-muted">Equipment</dt>
+            <dd class="text-right font-semibold">{EQUIPMENT_LABELS[ex.equipment] ?? '—'}</dd>
+          </div>
+        </dl>
+      </section>
+
+      {ex.image ? (
+        <p class="px-4 pt-4 pb-6 text-xs text-muted">
+          Bilder: free-exercise-db (Public Domain)
+        </p>
+      ) : (
+        <div class="pb-6" />
+      )}
+    </Layout>,
+  );
+});
+
 app.post('/exercises', async (c) => {
   const db = createDb(c.env.DB);
   const form = await c.req.formData();
@@ -206,6 +303,7 @@ app.post('/exercises', async (c) => {
   const name = String(form.get('name') ?? '').trim();
   const category = String(form.get('category') ?? '').trim() || 'Sonstige';
   const targetMuscle = String(form.get('targetMuscle') ?? '').trim();
+  const description = String(form.get('description') ?? '').trim().slice(0, 600);
 
   const movementRaw = String(form.get('movement') ?? '').trim();
   const equipmentRaw = String(form.get('equipment') ?? '').trim();
@@ -216,7 +314,16 @@ app.post('/exercises', async (c) => {
   if (name) {
     await db
       .insert(exercises)
-      .values({ id: newId('ex'), name, category, targetMuscle, movement, equipment, isCustom: true });
+      .values({
+        id: newId('ex'),
+        name,
+        category,
+        targetMuscle,
+        movement,
+        equipment,
+        description,
+        isCustom: true,
+      });
   }
   return c.redirect('/exercises', 303);
 });

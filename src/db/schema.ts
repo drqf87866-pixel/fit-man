@@ -29,6 +29,8 @@ export const exercises = sqliteTable(
      * Die Datei liegt unter /img/exercises/<slug>.jpg; leer => Icon-Fallback.
      */
     image: text('image').notNull().default(''),
+    /** Kurze Erklärung (2-3 Sätze) für die Detailseite. */
+    description: text('description').notNull().default(''),
     isCustom: integer('is_custom', { mode: 'boolean' }).notNull().default(false),
   },
   (t) => [index('idx_exercises_category').on(t.category)],

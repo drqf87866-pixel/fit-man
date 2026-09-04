@@ -554,17 +554,22 @@ app.get('/plans/:id', async (c) => {
           <ol class="flex flex-col gap-2">
             {items.map((it, i) => (
               <li class="card flex items-center gap-3 !p-3">
-                <span class="relative shrink-0">
-                  <ExerciseThumb image={it.image} category={it.category} class="size-11 rounded-lg" iconSize={20} />
-                  <span class="absolute -top-1 -left-1 grid size-5 place-items-center rounded-full bg-surface-2 text-[11px] font-bold text-muted ring-2 ring-surface tabular-nums">
-                    {i + 1}
+                <a
+                  href={`/exercises/${it.exerciseId}?from=/plans/${plan.id}`}
+                  class="flex min-w-0 flex-1 items-center gap-3"
+                >
+                  <span class="relative shrink-0">
+                    <ExerciseThumb image={it.image} category={it.category} class="size-11 rounded-lg" iconSize={20} />
+                    <span class="absolute -top-1 -left-1 grid size-5 place-items-center rounded-full bg-surface-2 text-[11px] font-bold text-muted ring-2 ring-surface tabular-nums">
+                      {i + 1}
+                    </span>
                   </span>
-                </span>
-                <span class="min-w-0 flex-1">
-                  <span class="block truncate font-semibold">{it.name}</span>
-                  <span class="block truncate text-xs text-muted">{it.targetMuscle}</span>
-                  <TagBadges movement={it.movement} equipment={it.equipment} />
-                </span>
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate font-semibold">{it.name}</span>
+                    <span class="block truncate text-xs text-muted">{it.targetMuscle}</span>
+                    <TagBadges movement={it.movement} equipment={it.equipment} />
+                  </span>
+                </a>
                 <span class="shrink-0 rounded-lg bg-surface-2 px-2.5 py-1 text-xs font-bold text-accent tabular-nums">
                   {it.targetSets} Sätze
                 </span>
