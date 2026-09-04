@@ -193,7 +193,10 @@
       emptySel: '[data-ex-empty]',
       matches: (item, q, active) => {
         if (active === '__custom' && item.dataset.custom !== '1') return false;
-        if (active && active !== '__custom' && item.dataset.category !== active) return false;
+        if (active && active !== '__custom') {
+          const tags = [item.dataset.category, item.dataset.movement, item.dataset.equipment];
+          if (!tags.includes(active)) return false;
+        }
         return !q || item.dataset.search.includes(q);
       },
     });

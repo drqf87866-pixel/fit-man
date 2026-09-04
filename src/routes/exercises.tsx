@@ -7,6 +7,7 @@ import { newId } from '../lib/format';
 import { CategoryBadge, Layout, PageHeader } from '../components/layout';
 import { TagBadges } from '../components/tags';
 import { Icon } from '../components/icons';
+import { MOVEMENT_LABELS, EQUIPMENT_LABELS } from '../lib/tags';
 import type { AppEnv } from '../types';
 
 const app = new Hono<AppEnv>();
@@ -55,6 +56,13 @@ app.get('/exercises', async (c) => {
               {cat}
             </button>
           ))}
+          <span class="mx-1 w-px shrink-0 self-stretch bg-border" aria-hidden="true"></span>
+          <button type="button" class="chip" data-ex-filter="push">Push</button>
+          <button type="button" class="chip" data-ex-filter="pull">Pull</button>
+          <span class="mx-1 w-px shrink-0 self-stretch bg-border" aria-hidden="true"></span>
+          <button type="button" class="chip" data-ex-filter="freihantel">Freihantel</button>
+          <button type="button" class="chip" data-ex-filter="maschine">Maschine</button>
+          <button type="button" class="chip" data-ex-filter="koerpergewicht">Körpergewicht</button>
           {customCount > 0 ? (
             <button type="button" class="chip" data-ex-filter="__custom">
               <Icon name="pencil" size={14} />
@@ -70,8 +78,10 @@ app.get('/exercises', async (c) => {
             class="card flex items-center gap-3 !p-3"
             data-ex-item
             data-category={ex.category}
+            data-movement={ex.movement}
+            data-equipment={ex.equipment}
             data-custom={ex.isCustom ? '1' : '0'}
-            data-search={`${ex.name} ${ex.targetMuscle} ${ex.category}`.toLowerCase()}
+            data-search={`${ex.name} ${ex.targetMuscle} ${ex.category} ${MOVEMENT_LABELS[ex.movement] ?? ''} ${EQUIPMENT_LABELS[ex.equipment] ?? ''}`.toLowerCase()}
           >
             <div class="grid size-10 shrink-0 place-items-center rounded-xl bg-surface-2 text-muted">
               <Icon name={ex.category === 'Cardio' ? 'flame' : 'dumbbell'} size={18} />
@@ -154,6 +164,28 @@ app.get('/exercises', async (c) => {
             </div>
 
             <div>
+              <label class="label" for="ex-movement">
+                Bewegungsmuster (optional)
+              </label>
+              <select class="input" id="ex-movement" name="movement">
+                <option value="">Keins</option>
+                <option value="push">Push (Drücken)</option>
+                <option value="pull">Pull (Ziehen)</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="label" for="ex-equipment">
+                Equipment
+              </label>
+              <select class="input" id="ex-equipment" name="equipment" required>
+                <option value="freihantel">Freihantel</option>
+                <option value="maschine">Maschine</option>
+                <option value="koerpergewicht">Körpergewicht</option>
+              </select>
+            </div>
+
+            <div>
               <label class="label" for="ex-target">
                 Zielmuskel (optional)
               </label>
@@ -186,10 +218,18 @@ app.post('/exercises', async (c) => {
   const category = String(form.get('category') ?? '').trim() || 'Sonstige';
   const targetMuscle = String(form.get('targetMuscle') ?? '').trim();
 
+  const movementRaw = String(form.get('movement') ?? '').trim();
+  const equipmentRaw = String(form.get('equipment') ?? '').trim();
+
+  const movement = movementRaw === 'push' || movementRaw === 'pull' ? movementRaw : '';
+  const equipment = ['freihantel', 'maschine', 'koerpergewicht'].includes(equipmentRaw)
+    ? equipmentRaw
+    : '';
+
   if (name) {
     await db
       .insert(exercises)
-      .values({ id: newId('ex'), name, category, targetMuscle, isCustom: true });
+      .values({ id: newId('ex'), name, category, targetMuscle, movement, equipment, isCustom: true });
   }
   return c.redirect('/exercises', 303);
 });
