@@ -109,11 +109,34 @@ Für Live-CSS in einem zweiten Terminal: `npm run watch:css`.
 
 ### 4. Deployment
 
+Das Cloudflare-Konto ist mit dem GitHub-Repo verbunden: **jeder Push auf `main`
+löst automatisch einen Build und einen Deploy des Workers aus.** Ein manuelles
+`npm run deploy` ist im Normalfall nicht nötig.
+
+> [!IMPORTANT]
+> Der automatische Deploy führt **nur** `wrangler deploy` aus. D1-Migrationen und
+> Seeds laufen **nicht** mit — die Datenbank ist von Cloudflares Sicht aus eine
+> externe Ressource und wird beim Build nicht angefasst.
+>
+> Beim erstmaligen Aufsetzen der Remote-DB und danach nach jeder Schema- oder
+> Seed-Änderung deshalb zusätzlich von Hand:
+>
+> ```bash
+> npm run db:migrate:remote  # neue Migrationen auf die Remote-D1 anwenden
+> npm run db:seed:remote     # seed.sql remote einspielen (idempotent)
+> ```
+>
+> Wird das vergessen, ist der neue Code live, die Produktionsdaten passen aber
+> nicht dazu: Spalten sind leer, Badges und Filter bleiben unsichtbar, und die
+> App wirkt kaputt, obwohl der Deploy grün war.
+
+Manuell deployen (z. B. ohne Commit) geht weiterhin:
+
 ```bash
-npm run db:migrate:remote  # Schema auf die Remote-D1 anwenden
-npm run db:seed:remote     # Übungsbibliothek einspielen (einmalig)
 npm run deploy             # CSS bauen + Worker deployen
 ```
+
+Deploy-Status prüfen: `npx wrangler deployments list`
 
 ---
 
@@ -143,6 +166,19 @@ npm run db:migrate:local
 npm run db:migrate:remote
 ```
 
+Migrationen **immer** über `db:generate` erzeugen, nie die `.sql` von Hand in
+`drizzle/` ablegen. Wrangler wendet zwar jede Datei im Ordner an, aber
+drizzle-kit führt seinen Stand getrennt in `drizzle/meta/` (`_journal.json` plus
+ein Snapshot je Migration). Fehlen diese Einträge, kennt drizzle-kit die
+Änderung nicht und erzeugt beim nächsten `db:generate` dieselben Statements ein
+zweites Mal — die Migration scheitert dann an `duplicate column`.
+
+Ob Migrationen und Metadaten zueinander passen, prüft:
+
+```bash
+npx drizzle-kit check --dialect=sqlite --out=./drizzle
+```
+
 ---
 
 ## Seed-Daten
@@ -151,6 +187,26 @@ npm run db:migrate:remote
 Rumpf, Cardio) — Bankdrücken, Kniebeugen, Kreuzheben, Klimmzüge usw. Das Skript
 nutzt `INSERT OR IGNORE` mit festen IDs und ist damit beliebig oft ausführbar.
 Eigene Übungen aus der App landen mit `is_custom = 1` in derselben Tabelle.
+
+> [!IMPORTANT]
+> `INSERT OR IGNORE` überspringt Zeilen, deren ID schon existiert — **inklusive
+> geänderter Spaltenwerte**. Wer einer bestehenden Übung ein neues Feld verpassen
+> will (wie damals `movement`/`equipment`), erreicht mit dem `INSERT` allein
+> nichts: bei einer bereits geseedeten Datenbank passiert schlicht gar nichts.
+>
+> Deshalb steht am Ende von `seed.sql` ein `UPDATE`-Block, der die Tags per
+> `CASE id` auch auf vorhandene Zeilen schreibt. **Neue Spaltenwerte immer dort
+> ebenfalls nachtragen**, sonst sehen nur frische Datenbanken die Änderung.
+
+Nach einer Seed-Änderung gegenprüfen, dass die Werte wirklich angekommen sind:
+
+```bash
+npx wrangler d1 execute fit-man-db --remote --json --command "SELECT count(*) total, sum(movement <> '') mit_movement, sum(equipment <> '') mit_equipment FROM exercises;"
+# -> { "total": 31, "mit_movement": 18, "mit_equipment": 31 }
+```
+
+Das `--command` muss einzeilig bleiben; mehrzeilige Statements kommen bei D1 als
+`incomplete input` an. Für längeres SQL stattdessen `--file=...` nutzen.
 
 ---
 
