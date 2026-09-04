@@ -9,37 +9,6 @@ const NAV: { key: Exclude<NavKey, null>; href: string; label: string; icon: Icon
   { key: 'history', href: '/history', label: 'Verlauf', icon: 'history' },
 ];
 
-/**
- * Prerender der Tab-Ziele (Speculation Rules).
- *
- * Wir sind eine klassische MPA – jeder Tab-Wechsel ist eine echte Navigation.
- * Ein aktivierter Prerender wird dagegen sofort eingeblendet, der Wechsel
- * kostet also keine Ladezeit mehr.
- *
- * `immediate` rendert schon beim Seitenaufbau vor, nicht erst beim Antippen:
- * Bei `moderate` (pointerdown) war der Prerender bis zum Loslassen des Fingers
- * nicht fertig – /history zieht Workouts, Stats und Recaps aus D1 – und Chrome
- * fiel auf eine normale Navigation zurück. Chrome hält für nicht-conservative
- * Eagerness maximal zwei Prerender gleichzeitig; da eine der drei Seiten immer
- * die aktuelle ist, bleiben genau zwei Kandidaten und die Grenze passt.
- *
- * Preis dafür sind zwei zusätzliche Seitenrenderings (und damit D1-Reads) pro
- * Seitenaufruf. Nur die Nav-Ziele stehen in der Liste: alles GET und
- * nebenwirkungsfrei. Browser ohne Speculation Rules (Safari) ignorieren das
- * Script.
- *
- * Offen: Ob damit auch Chromes eigener Ladebalken im Standalone-PWA-Modus
- * verschwindet, ist unbestätigt – mit `moderate` tat er es nicht.
- */
-const SPECULATION_RULES = JSON.stringify({
-  prerender: [
-    {
-      where: { any_of: NAV.map((item) => ({ href_matches: item.href })) },
-      eagerness: 'immediate',
-    },
-  ],
-});
-
 const BottomNav: FC<{ active: NavKey }> = ({ active }) => (
   <nav class="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-surface/95 backdrop-blur-md safe-bottom">
     <ul class="mx-auto flex max-w-lg">
@@ -83,12 +52,6 @@ export const Layout: FC<LayoutProps> = ({ title, active = null, bare = false, ch
       <link rel="stylesheet" href="/styles.css" />
       <link rel="manifest" href="/manifest.webmanifest" />
       <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-      {bare ? null : (
-        <script
-          type="speculationrules"
-          dangerouslySetInnerHTML={{ __html: SPECULATION_RULES }}
-        />
-      )}
     </head>
     <body class={bare ? '' : 'pb-24'}>
       <div class="mx-auto min-h-dvh max-w-lg">{children}</div>
