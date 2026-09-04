@@ -1,22 +1,24 @@
-import { formatDateShort } from './format';
+import { civil, formatDateShort, zonedMidnightMs } from './format';
 
 /**
- * ISO-8601-Kalenderwochen-Helfer (UTC, Montag als Wochenbeginn).
+ * ISO-8601-Kalenderwochen-Helfer (Montag als Wochenbeginn).
  *
- * Passt zur restlichen App, die alle Datumslogik in UTC rechnet (siehe
- * format.ts). `workout_logs.date` liegt als Unix-SEKUNDEN vor – deshalb
- * arbeiten die Grenzen hier mit Sekunden.
+ * Gerechnet wird auf dem Kalenderdatum in der Zeitzone des Nutzers (siehe
+ * format.ts) – in UTC läge ein Training am Sonntagabend nach 22:00 Ortszeit
+ * schon in der Folgewoche. `workout_logs.date` liegt als Unix-SEKUNDEN vor,
+ * deshalb arbeiten die Grenzen hier mit Sekunden.
+ *
+ * Die reine Wochen-Arithmetik (ISO-Donnerstag, Jan-4-Anker) rechnet weiter mit
+ * `Date.UTC`, weil sie auf Kalendertagen ohne Uhrzeit operiert. Erst beim
+ * Umrechnen in Zeitstempel kommt die Zeitzone ins Spiel.
  */
 
 export type IsoWeek = { year: number; week: number; weekKey: string };
 
-/**
- * ISO-Kalenderwoche eines Datums (UTC).
- * Wochenkey "2026-35" = ISO-Jahr + zweistellige Kalenderwoche.
- */
+/** ISO-Kalenderwoche eines Zeitpunkts. Wochenkey "2026-35" = ISO-Jahr + KW. */
 export function isoWeek(date: Date): IsoWeek {
-  // Kopie auf UTC-Mitternacht des Tages.
-  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const c = civil(date);
+  const d = new Date(Date.UTC(c.year, c.month - 1, c.day));
   const dayNum = d.getUTCDay() || 7; // ISO-Wochentag: Mon=1 … Son=7
   d.setUTCDate(d.getUTCDate() + 4 - dayNum); // Donnerstag dieser ISO-Woche
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
@@ -35,24 +37,39 @@ export function parseWeekKey(key: string): { year: number; week: number } | null
   return { year, week };
 }
 
-/** UTC-Montag 00:00 der Woche (Anker: ISO-Woche 1 = Woche mit dem 4. Januar). */
-export function mondayOfWeek(year: number, week: number): Date {
+/** Kalendertag des Montags einer ISO-Woche (Anker: ISO-Woche 1 enthält den 4.1.). */
+function mondayCivil(year: number, week: number): { year: number; month: number; day: number } {
   const jan4 = Date.UTC(year, 0, 4);
   const dayNum = (new Date(jan4).getUTCDay() + 6) % 7; // Mo=0 … So=6
-  const jan4Monday = jan4 - dayNum * 86_400_000;
-  return new Date(jan4Monday + (week - 1) * 604_800_000);
+  const monday = new Date(jan4 - dayNum * 86_400_000 + (week - 1) * 604_800_000);
+  return {
+    year: monday.getUTCFullYear(),
+    month: monday.getUTCMonth() + 1,
+    day: monday.getUTCDate(),
+  };
+}
+
+/** Montag 00:00 Ortszeit der Woche. */
+export function mondayOfWeek(year: number, week: number): Date {
+  const m = mondayCivil(year, week);
+  return new Date(zonedMidnightMs(m.year, m.month, m.day));
 }
 
 /**
  * Exklusive Sekunden-Grenzen [fromSec, toSec) einer Woche für
  * `WHERE wl.date >= from AND wl.date < to`. null bei ungültigem Key.
+ *
+ * Das Ende ist der Montag der Folgewoche um 00:00 Ortszeit – nicht from + 7
+ * Tage, denn eine Woche mit Zeitumstellung hat 23 bzw. 25 Stunden.
  */
 export function weekBoundsSec(key: string): { fromSec: number; toSec: number } | null {
   const parsed = parseWeekKey(key);
   if (!parsed) return null;
   const from = mondayOfWeek(parsed.year, parsed.week);
-  const fromSec = Math.floor(from.getTime() / 1000);
-  return { fromSec, toSec: fromSec + 7 * 86_400 };
+  const next = new Date(from.getTime() + 8 * 86_400_000); // sicher in der Folgewoche
+  const nextMonday = isoWeek(next);
+  const to = mondayOfWeek(nextMonday.year, nextMonday.week);
+  return { fromSec: Math.floor(from.getTime() / 1000), toSec: Math.floor(to.getTime() / 1000) };
 }
 
 /** "2026-35" -> "KW 35" */

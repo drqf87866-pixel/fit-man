@@ -182,3 +182,35 @@ export async function geminiJson<T>(
   // Nur erreichbar, wenn alle Versuche transient scheiterten.
   throw lastError ?? new GeminiError('timeout', 'Gemini-Aufruf fehlgeschlagen.');
 }
+
+// ---------------------------------------------------------------------------
+// Gemeinsame Fehleraufbereitung für alle KI-Features
+// ---------------------------------------------------------------------------
+
+/** GeminiError -> stabiler Schlüssel für Query-Params und JSON-Antworten. */
+export function geminiErrorKey(e: GeminiError): string {
+  switch (e.code) {
+    case 'missing-key':
+      return 'key';
+    case 'timeout':
+      return 'timeout';
+    case 'empty':
+      return 'empty';
+    case 'parse':
+      return 'invalid';
+    case 'http':
+      return 'http';
+  }
+}
+
+/**
+ * Deutsche Texte je Fehlerschlüssel. Features ergänzen eigene Schlüssel per
+ * Spread, z. B. `{ ...GEMINI_ERROR_TEXTS, prompt: '…' }`.
+ */
+export const GEMINI_ERROR_TEXTS: Record<string, string> = {
+  empty: 'Der KI-Dienst hat keine Antwort geliefert. Bitte versuche es erneut.',
+  invalid: 'Die Antwort war nicht verwertbar. Bitte versuche es erneut.',
+  key: 'Der KI-Schlüssel ist nicht eingerichtet.',
+  timeout: 'Der KI-Dienst hat zu lange gebraucht. Bitte erneut versuchen.',
+  http: 'Der KI-Dienst ist gerade nicht erreichbar. Bitte später erneut versuchen.',
+};

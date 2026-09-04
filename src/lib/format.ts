@@ -23,20 +23,85 @@ const DAYS = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freita
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
+/**
+ * Alle Datumsangaben werden in der Zeitzone des Nutzers dargestellt, nicht in
+ * UTC. Sonst landet ein Training am Sonntagabend nach 22:00 Ortszeit im
+ * nächsten Kalendertag – und damit in der falschen ISO-Woche (siehe weeks.ts).
+ * Die gespeicherten Werte bleiben unverändert Unix-Sekunden.
+ */
+export const TZ = 'Europe/Berlin';
+
+const TZ_FORMAT = new Intl.DateTimeFormat('en-US', {
+  timeZone: TZ,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
+
+/** Kalenderdatum und Uhrzeit eines Zeitpunkts in TZ. */
+export type Civil = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+};
+
+export function civil(date: Date): Civil {
+  const parts: Record<string, string> = {};
+  for (const p of TZ_FORMAT.formatToParts(date)) {
+    if (p.type !== 'literal') parts[p.type] = p.value;
+  }
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    // 'hour12: false' liefert je nach ICU-Version 24 statt 00 für Mitternacht.
+    hour: Number(parts.hour) % 24,
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+  };
+}
+
+/** Versatz TZ gegenüber UTC in Millisekunden zum gegebenen Zeitpunkt. */
+function tzOffsetMs(date: Date): number {
+  const c = civil(date);
+  const asUtc = Date.UTC(c.year, c.month - 1, c.day, c.hour, c.minute, c.second);
+  return asUtc - Math.floor(date.getTime() / 1000) * 1000;
+}
+
+/**
+ * Zeitpunkt (ms) von 00:00 Ortszeit des angegebenen Kalendertags.
+ * Zweiter Durchlauf, weil der Versatz an DST-Wechseln vom Ergebnis abhängt.
+ */
+export function zonedMidnightMs(year: number, month: number, day: number): number {
+  const naive = Date.UTC(year, month - 1, day);
+  const once = naive - tzOffsetMs(new Date(naive));
+  return naive - tzOffsetMs(new Date(once));
+}
+
+/** Kalendertag als Tageszahl – Basis für Differenzen ohne Uhrzeit-Rauschen. */
+const dayNumber = (c: Civil) => Date.UTC(c.year, c.month - 1, c.day) / 86_400_000;
+
 export function formatDate(date: Date): string {
-  return `${DAYS[date.getUTCDay()]}, ${formatDateShort(date)}`;
+  const c = civil(date);
+  const weekday = new Date(Date.UTC(c.year, c.month - 1, c.day)).getUTCDay();
+  return `${DAYS[weekday]}, ${formatDateShort(date)}`;
 }
 
 export function formatDateShort(date: Date): string {
-  return `${pad2(date.getUTCDate())}.${pad2(date.getUTCMonth() + 1)}.${date.getUTCFullYear()}`;
+  const c = civil(date);
+  return `${pad2(c.day)}.${pad2(c.month)}.${c.year}`;
 }
 
 /** "Heute" / "Gestern" / "vor 3 Tagen" / Datum */
 export function formatRelative(date: Date, now = new Date()): string {
-  const day = 86_400_000;
-  const a = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
-  const b = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const diff = Math.round((b - a) / day);
+  const diff = dayNumber(civil(now)) - dayNumber(civil(date));
   if (diff <= 0) return 'Heute';
   if (diff === 1) return 'Gestern';
   if (diff < 7) return `vor ${diff} Tagen`;
@@ -51,4 +116,15 @@ export function formatWeight(kg: number): string {
 export function formatVolume(kg: number): string {
   if (kg >= 1000) return `${(Math.round(kg / 100) / 10).toString().replace('.', ',')} t`;
   return `${Math.round(kg)} kg`;
+}
+
+/**
+ * Geschätztes 1RM nach Epley: kg × (1 + Wdh/30).
+ * Nur eine Schätzung – bei sehr hohen Wiederholungszahlen zunehmend ungenau,
+ * deshalb ab 15 Wdh. nicht mehr ausgewiesen (null).
+ */
+export function estimateOneRepMax(kg: number, reps: number): number | null {
+  if (kg <= 0 || reps <= 0 || reps > 15) return null;
+  if (reps === 1) return kg;
+  return Math.round(kg * (1 + reps / 30) * 10) / 10;
 }

@@ -75,6 +75,13 @@
     timer: '<circle cx="12" cy="14" r="8"/><path d="M10 2h4"/><path d="M12 14v-4"/>',
     flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>',
     search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.34-4.34"/>',
+    sparkles:
+      '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
+    // Von exerciseThumb() für Übungen ohne Bild gebraucht.
+    dumbbell:
+      '<path d="m6.5 6.5 11 11"/><path d="m21 21-1-1"/><path d="m3 3 1 1"/><path d="m18 22 4-4"/><path d="m2 6 4-4"/><path d="m3 10 7-7"/><path d="m14 21 7-7"/>',
+    flame:
+      '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
   };
 
   // Muss zu src/lib/tags.ts passen.
@@ -254,9 +261,25 @@
       },
     });
 
+    const list = $('[data-plan-list]');
     const counter = $('[data-plan-count]');
+    const isChecked = (item) => item.querySelector('[data-plan-check]').checked;
+    const checkedItems = () => $$('[data-plan-item]', list).filter(isChecked);
+
+    /**
+     * Ausgewählte Übungen stehen immer oben in Plan-Reihenfolge; die
+     * order_<id>-Hiddens werden dabei auf 0..n-1 durchnummeriert. Sie sind die
+     * einzige Quelle der Reihenfolge für den Server – die DOM-Reihenfolge von
+     * getAll('exerciseId') wäre die Bibliothekssortierung.
+     */
+    const renumber = () => {
+      checkedItems().forEach((item, i) => {
+        item.querySelector('[data-plan-order]').value = String(i);
+      });
+    };
+
     const refreshCount = () => {
-      const n = $$('[data-plan-check]:checked').length;
+      const n = checkedItems().length;
       if (counter) counter.textContent = `${n} ausgewählt`;
     };
 
@@ -268,10 +291,36 @@
       sets.classList.toggle('hidden', !check.checked);
       sets.classList.toggle('flex', check.checked);
       item.classList.toggle('border-accent', check.checked);
+      // Neu angehakte Übungen ans Ende der Auswahl, abgewählte hinter die Auswahl.
+      const selected = checkedItems();
+      if (check.checked) {
+        const last = selected[selected.length - 1];
+        if (last && last !== item) last.after(item);
+      } else {
+        const last = selected[selected.length - 1];
+        if (last) last.after(item);
+      }
+      renumber();
       refreshCount();
     });
 
     form.addEventListener('click', (e) => {
+      const up = e.target.closest('[data-order-up]');
+      const down = e.target.closest('[data-order-down]');
+      if (up || down) {
+        const item = (up ?? down).closest('[data-plan-item]');
+        const selected = checkedItems();
+        const i = selected.indexOf(item);
+        const swap = selected[i + (up ? -1 : 1)];
+        if (swap) {
+          if (up) swap.before(item);
+          else swap.after(item);
+          renumber();
+          item.scrollIntoView({ block: 'nearest' });
+        }
+        return;
+      }
+
       const dec = e.target.closest('[data-sets-dec]');
       const inc = e.target.closest('[data-sets-inc]');
       if (!dec && !inc) return;
@@ -286,6 +335,7 @@
       }
     });
 
+    renumber();
     refreshCount();
   }
 
@@ -471,6 +521,10 @@
                 return badges ? `<div class="mt-1 flex flex-wrap gap-1">${badges}</div>` : '';
               })()}
             </div>
+            <button type="button" class="btn-ghost !min-w-11 !px-0 text-accent" data-action="alternatives"
+              aria-label="Ersatzübung vorschlagen (Gerät belegt)">
+              ${icon('sparkles', 20)}
+            </button>
             <button type="button" class="btn-ghost !min-w-11 !px-0" data-action="remove-exercise" aria-label="Übung entfernen">
               ${icon('x', 20)}
             </button>
@@ -705,6 +759,125 @@
     }
 
     // --------------------------------------------------------------------
+    // KI-Ersatzübungen ("Gerät belegt")
+    // --------------------------------------------------------------------
+
+    /** Tauscht die aktuelle Übung gegen `ex`, behält die Satzanzahl bei. */
+    function replaceCurrentExercise(ex) {
+      const old = entry();
+      const doneCount = old.sets.filter((s) => s.completed).length;
+      if (
+        doneCount > 0 &&
+        !window.confirm(
+          `${doneCount} bereits abgehakte${doneCount === 1 ? 'r Satz geht' : ' Sätze gehen'} von "${old.name}" verloren. Trotzdem tauschen?`,
+        )
+      ) {
+        return false;
+      }
+      // Neue Übung mit derselben Satzanzahl; Vorwerte kommen – falls vorhanden –
+      // aus payload.previous der neuen Übung, sonst leer.
+      state.entries[state.current] = makeEntry(ex, old.sets.length);
+      save();
+      render();
+      return true;
+    }
+
+    function openAlternativesSheet() {
+      const source = entry();
+      const overlay = document.createElement('div');
+      overlay.className = 'fixed inset-0 z-50 flex items-end bg-black/60 backdrop-blur-sm';
+
+      const shell = (body) => `
+        <div class="mx-auto flex max-h-[85dvh] w-full max-w-lg flex-col rounded-t-3xl border-t border-border bg-surface pb-6 safe-bottom">
+          <div class="mx-auto mt-3 mb-3 h-1 w-10 rounded-full bg-border"></div>
+          <div class="flex items-start gap-2 px-4 pb-3">
+            <div class="min-w-0 flex-1">
+              <h2 class="text-lg font-bold">Ersatz für ${esc(source.name)}</h2>
+              <p class="truncate text-sm text-muted">Gerät belegt? Diese Übungen treffen denselben Muskel.</p>
+            </div>
+            <button type="button" class="btn-ghost !min-w-11 !px-0" data-alt-close aria-label="Schließen">
+              ${icon('x', 22)}
+            </button>
+          </div>
+          <div class="flex-1 overflow-y-auto px-4" data-alt-body>${body}</div>
+        </div>`;
+
+      const loading = `
+        <p class="flex items-center gap-2 py-8 text-sm text-muted">
+          ${icon('sparkles', 18)} Suche passende Alternativen …
+        </p>`;
+
+      overlay.innerHTML = shell(loading);
+      document.body.appendChild(overlay);
+      document.body.style.overflow = 'hidden';
+
+      const close = () => {
+        overlay.remove();
+        document.body.style.overflow = '';
+      };
+
+      let results = [];
+
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay || e.target.closest('[data-alt-close]')) return close();
+        if (e.target.closest('[data-alt-fallback]')) {
+          close();
+          openPicker();
+          return;
+        }
+        const pick = e.target.closest('[data-alt-pick]');
+        if (!pick) return;
+        const ex = results.find((x) => x.exerciseId === pick.dataset.altPick);
+        if (ex && replaceCurrentExercise(ex) === false) return;
+        close();
+      });
+
+      const failure = (message) => `
+        <div class="flex flex-col gap-3 py-6">
+          <p class="text-sm text-muted">${esc(message)}</p>
+          <button type="button" class="btn-secondary w-full" data-alt-fallback>
+            ${icon('search', 18)} Alle Übungen durchsuchen
+          </button>
+        </div>`;
+
+      fetch(`/api/exercises/${encodeURIComponent(source.exerciseId)}/alternatives`)
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.message || 'Vorschläge nicht verfügbar.');
+          return data;
+        })
+        .then((data) => {
+          results = data.alternatives ?? [];
+          const body = $('[data-alt-body]', overlay);
+          if (!body) return;
+          if (results.length === 0) {
+            body.innerHTML = failure('Keine passende Alternative gefunden.');
+            return;
+          }
+          body.innerHTML = results
+            .map(
+              (ex) => `
+              <button type="button" class="flex w-full touch items-start gap-3 border-b border-border/60 py-3 text-left"
+                      data-alt-pick="${esc(ex.exerciseId)}">
+                ${exerciseThumb(ex.image, ex.category, 'size-12 rounded-lg')}
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate font-semibold">${esc(ex.name)}</span>
+                  <span class="block truncate text-xs text-muted">${esc(ex.targetMuscle || ex.category)}</span>
+                  ${tagBadges(ex.movement, ex.equipment) ? `<span class="mt-1 flex flex-wrap gap-1">${tagBadges(ex.movement, ex.equipment)}</span>` : ''}
+                  ${ex.reason ? `<span class="mt-1 block text-xs text-accent">${esc(ex.reason)}</span>` : ''}
+                </span>
+              </button>`,
+            )
+            .join('');
+        })
+        .catch((err) => {
+          console.error('[fit-man] Alternativen', err);
+          const body = $('[data-alt-body]', overlay);
+          if (body) body.innerHTML = failure(err.message || 'Vorschläge nicht verfügbar.');
+        });
+    }
+
+    // --------------------------------------------------------------------
     // Beenden & Speichern
     // --------------------------------------------------------------------
     function openFinishSheet() {
@@ -863,6 +1036,7 @@
           if (entry().sets.length > 1) entry().sets.pop();
         },
         'add-exercise': openPicker,
+        alternatives: openAlternativesSheet,
         'remove-exercise': () => {
           if (!window.confirm(`"${entry().name}" aus diesem Training entfernen?`)) return false;
           state.entries.splice(state.current, 1);
@@ -907,7 +1081,8 @@
       if (!fn) return;
       const result = fn();
       if (result === false) return;
-      if (action === 'add-exercise' || action === 'finish') return;
+      // Sheets rendern selbst, sobald der Nutzer darin etwas gewählt hat.
+      if (action === 'add-exercise' || action === 'finish' || action === 'alternatives') return;
       save();
       render();
     });

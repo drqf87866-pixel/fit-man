@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
-import { createDb } from '../db';
+import { createDb, type DB } from '../db';
 import { planExercises, workoutPlans, type Exercise } from '../db/schema';
 import { getPlanExercises, listExercises, listPlans, type PlanListRow } from '../lib/queries';
 import { formatRelative, newId } from '../lib/format';
@@ -10,7 +10,7 @@ import { ExerciseThumb } from '../components/exercise-image';
 import { MOVEMENT_LABELS, EQUIPMENT_LABELS } from '../lib/tags';
 import { ExerciseFilters } from '../components/filters';
 import { Icon } from '../components/icons';
-import { geminiJson, GeminiError } from '../lib/gemini';
+import { geminiJson, GeminiError, geminiErrorKey, GEMINI_ERROR_TEXTS } from '../lib/gemini';
 import type { AppEnv } from '../types';
 
 const app = new Hono<AppEnv>();
@@ -118,21 +118,49 @@ type PlanBuilderFormProps = {
   initialDescription?: string;
   /** exerciseId -> targetSets, vorbefüllt (z. B. von der KI) */
   initialSelected?: Map<string, number>;
+  /** exerciseId -> sort_order; bestimmt die Startreihenfolge der Auswahl */
+  initialOrder?: Map<string, number>;
+  /** Ziel des Formulars – POST /plans (neu) oder POST /plans/:id (bearbeiten) */
+  action?: string;
+  submitLabel?: string;
   /** Blendet den "KI-generiert"-Hinweis + "Neue Idee"-Link ein */
   aiHint?: boolean;
 };
+
+/** Ausgewählte Übungen zuerst, in Plan-Reihenfolge – danach der Rest wie gehabt. */
+function orderForBuilder(
+  all: Exercise[],
+  selected: Map<string, number>,
+  order: Map<string, number>,
+): Exercise[] {
+  // Ohne explizites sort_order (z. B. KI-Entwurf) zählt die Einfügereihenfolge
+  // der Auswahl – die trägt beim Generator die gewünschte Übungsabfolge.
+  const fallback = new Map([...selected.keys()].map((id, i) => [id, i] as const));
+  const rank = (e: Exercise) =>
+    selected.has(e.id)
+      ? (order.get(e.id) ?? fallback.get(e.id) ?? 0)
+      : Number.MAX_SAFE_INTEGER;
+  return all
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => rank(a.e) - rank(b.e) || a.i - b.i)
+    .map((x) => x.e);
+}
 
 const PlanBuilderForm = ({
   all,
   initialName = '',
   initialDescription = '',
   initialSelected = new Map<string, number>(),
+  initialOrder = new Map<string, number>(),
+  action = '/plans',
+  submitLabel = 'Plan speichern',
   aiHint = false,
 }: PlanBuilderFormProps) => {
   const categories = [...new Set(all.map((e) => e.category))];
   const sel = (id: string) => initialSelected.get(id);
+  const items = orderForBuilder(all, initialSelected, initialOrder);
   return (
-    <form method="post" action="/plans" class="flex flex-col gap-5 px-4 py-4" data-plan-form>
+    <form method="post" action={action} class="flex flex-col gap-5 px-4 py-4" data-plan-form>
       {aiHint ? (
         <div class="flex items-start gap-3 rounded-2xl border border-accent/30 bg-accent-soft px-4 py-3">
           <Icon name="sparkles" size={18} class="mt-0.5 shrink-0 text-accent" />
@@ -203,7 +231,7 @@ const PlanBuilderForm = ({
         </div>
 
         <ul class="flex flex-col gap-2" data-plan-list>
-          {all.map((ex) => {
+          {items.map((ex, index) => {
             const sets = sel(ex.id);
             const checked = sets !== undefined;
             const itemClass = `rounded-xl border bg-surface ${
@@ -239,6 +267,24 @@ const PlanBuilderForm = ({
                   class={`${checked ? 'flex' : 'hidden'} items-center gap-2 border-t border-border px-3 py-2`}
                   data-plan-sets
                 >
+                  {/* Position im Plan – wird von app.js beim Sortieren durchnummeriert. */}
+                  <input type="hidden" name={`order_${ex.id}`} value={index} data-plan-order />
+                  <button
+                    type="button"
+                    class="btn-secondary !min-w-11 !px-0"
+                    data-order-up
+                    aria-label={`${ex.name} nach oben`}
+                  >
+                    <Icon name="chevronUp" size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-secondary !min-w-11 !px-0"
+                    data-order-down
+                    aria-label={`${ex.name} nach unten`}
+                  >
+                    <Icon name="chevronDown" size={18} />
+                  </button>
                   <span class="text-sm text-muted">Sätze</span>
                   <div class="ml-auto flex items-center gap-1">
                     <button type="button" class="btn-secondary !min-w-11 !px-0" data-sets-dec>
@@ -269,7 +315,7 @@ const PlanBuilderForm = ({
         <div class="flex flex-col gap-2">
           <button type="submit" class="btn-primary w-full shadow-xl">
             <Icon name="save" size={20} />
-            Plan speichern
+            {submitLabel}
           </button>
           <a href="/plans/generate" class="btn-ghost w-full text-center">
             Neue Idee (erneut generieren)
@@ -279,7 +325,7 @@ const PlanBuilderForm = ({
         <div class="sticky bottom-24 z-20">
           <button type="submit" class="btn-primary w-full shadow-xl">
             <Icon name="save" size={20} />
-            Plan speichern
+            {submitLabel}
           </button>
         </div>
       )}
@@ -308,28 +354,53 @@ function clampSets(raw: unknown): number {
   return Math.min(20, Math.max(1, n));
 }
 
+/**
+ * Angekreuzte Übungen in der vom Nutzer gewählten Reihenfolge.
+ *
+ * `form.getAll('exerciseId')` liefert nur die DOM-Reihenfolge der nach
+ * Kategorie/Name sortierten Bibliothek. Die tatsächliche Trainingsabfolge
+ * steht in den `order_<id>`-Hidden-Feldern, die app.js beim Sortieren
+ * durchnummeriert. Fehlt der Wert (JS aus), bleibt die Eingangsreihenfolge.
+ */
+function selectedExerciseIds(form: FormData): string[] {
+  return form
+    .getAll('exerciseId')
+    .map(String)
+    .map((id, i) => {
+      const raw = Number(form.get(`order_${id}`));
+      return { id, order: Number.isFinite(raw) ? raw : i, i };
+    })
+    .sort((a, b) => a.order - b.order || a.i - b.i)
+    .map((x) => x.id);
+}
+
+/** Plan-Übungen als Insert-Statements in der übergebenen Reihenfolge. */
+function planExerciseInserts(db: DB, planId: string, ids: string[], form: FormData) {
+  return ids.map((exerciseId, index) =>
+    db.insert(planExercises).values({
+      id: newId('pe'),
+      planId,
+      exerciseId,
+      order: index,
+      targetSets: clampSets(form.get(`targetSets_${exerciseId}`)),
+    }),
+  );
+}
+
 app.post('/plans', async (c) => {
   const db = createDb(c.env.DB);
   const form = await c.req.formData();
 
   const name = String(form.get('name') ?? '').trim();
   const description = String(form.get('description') ?? '').trim();
-  const exerciseIds = form.getAll('exerciseId').map(String);
+  const exerciseIds = selectedExerciseIds(form);
 
   if (!name) return c.redirect('/plans/new', 303);
 
   const planId = newId('plan');
   const statements = [
     db.insert(workoutPlans).values({ id: planId, name, description, createdAt: new Date() }),
-    ...exerciseIds.map((exerciseId, index) =>
-      db.insert(planExercises).values({
-        id: newId('pe'),
-        planId,
-        exerciseId,
-        order: index,
-        targetSets: clampSets(form.get(`targetSets_${exerciseId}`)),
-      }),
-    ),
+    ...planExerciseInserts(db, planId, exerciseIds, form),
   ];
 
   // D1 batch = eine implizite Transaktion: Plan + Übungen landen gemeinsam.
@@ -379,28 +450,11 @@ const PLAN_SYSTEM = [
 ].join('\n');
 
 const GENERATE_ERRORS: Record<string, string> = {
+  ...GEMINI_ERROR_TEXTS,
   prompt: 'Bitte beschreibe kurz dein Wunschtraining.',
   empty: 'Der KI-Dienst hat keinen Plan geliefert. Bitte versuche es erneut.',
   invalid: 'Die Antwort war nicht verwertbar. Bitte formuliere den Wunsch anders.',
-  key: 'Der KI-Schlüssel ist nicht eingerichtet.',
-  timeout: 'Der KI-Dienst hat zu lange gebraucht. Bitte erneut versuchen.',
-  http: 'Der KI-Dienst ist gerade nicht erreichbar. Bitte später erneut versuchen.',
 };
-
-function geminiErrorKey(e: GeminiError): string {
-  switch (e.code) {
-    case 'missing-key':
-      return 'key';
-    case 'timeout':
-      return 'timeout';
-    case 'empty':
-      return 'empty';
-    case 'parse':
-      return 'invalid';
-    case 'http':
-      return 'http';
-  }
-}
 
 const GenerateForm = ({ error, prompt }: { error?: string; prompt?: string }) => (
   <Layout title="KI-Plan erstellen" active="training">
@@ -535,7 +589,15 @@ app.get('/plans/:id', async (c) => {
 
   return c.html(
     <Layout title={plan.name} active="training">
-      <PageHeader title={plan.name} subtitle={plan.description || undefined} back="/" />
+      <PageHeader title={plan.name} subtitle={plan.description || undefined} back="/">
+        <a
+          href={`/plans/${plan.id}/edit`}
+          class="btn-secondary !px-3"
+          aria-label="Plan bearbeiten"
+        >
+          <Icon name="pencil" size={20} />
+        </a>
+      </PageHeader>
 
       <div class="px-4 py-4">
         <a href={`/workout/active?plan=${plan.id}`} class="btn-primary !h-14 w-full text-lg">
@@ -593,6 +655,60 @@ app.get('/plans/:id', async (c) => {
       </div>
     </Layout>,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Plan bearbeiten  (GET /plans/:id/edit, POST /plans/:id)
+// ---------------------------------------------------------------------------
+app.get('/plans/:id/edit', async (c) => {
+  const db = createDb(c.env.DB);
+  const id = c.req.param('id');
+
+  const [plan] = await db.select().from(workoutPlans).where(eq(workoutPlans.id, id)).limit(1);
+  if (!plan) return c.notFound();
+
+  const items = await getPlanExercises(db, id);
+  const all = await listExercises(db);
+
+  return c.html(
+    <Layout title="Plan bearbeiten" active="training">
+      <PageHeader title="Plan bearbeiten" subtitle={plan.name} back={`/plans/${plan.id}`} />
+      <PlanBuilderForm
+        all={all}
+        initialName={plan.name}
+        initialDescription={plan.description}
+        initialSelected={new Map(items.map((it) => [it.exerciseId, it.targetSets]))}
+        initialOrder={new Map(items.map((it) => [it.exerciseId, it.order]))}
+        action={`/plans/${plan.id}`}
+        submitLabel="Änderungen speichern"
+      />
+    </Layout>,
+  );
+});
+
+app.post('/plans/:id', async (c) => {
+  const db = createDb(c.env.DB);
+  const id = c.req.param('id');
+
+  const [plan] = await db.select().from(workoutPlans).where(eq(workoutPlans.id, id)).limit(1);
+  if (!plan) return c.notFound();
+
+  const form = await c.req.formData();
+  const name = String(form.get('name') ?? '').trim();
+  const description = String(form.get('description') ?? '').trim();
+  if (!name) return c.redirect(`/plans/${id}/edit`, 303);
+
+  // plan_exercises komplett ersetzen: Reihenfolge und Auswahl sind sonst nicht
+  // sauber zu diffen. Unkritisch, weil workout_logs auf plan_id verweisen,
+  // nicht auf plan_exercises.
+  const statements = [
+    db.update(workoutPlans).set({ name, description }).where(eq(workoutPlans.id, id)),
+    db.delete(planExercises).where(eq(planExercises.planId, id)),
+    ...planExerciseInserts(db, id, selectedExerciseIds(form), form),
+  ];
+
+  await db.batch(statements as [(typeof statements)[number], ...(typeof statements)[number][]]);
+  return c.redirect(`/plans/${id}`, 303);
 });
 
 app.post('/plans/:id/delete', async (c) => {

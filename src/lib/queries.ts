@@ -277,3 +277,67 @@ export async function upsertRecap(db: DB, r: NewRecapData): Promise<void> {
       },
     });
 }
+
+// ---------------------------------------------------------------------------
+// Fortschritt je Übung (Feature: Verlaufskurve auf der Übungsdetailseite)
+// ---------------------------------------------------------------------------
+
+/** Eine Trainingseinheit, in der diese Übung geloggt wurde. */
+export type ProgressPoint = {
+  date: number;
+  /** Schwerstes Gewicht der Einheit */
+  top_kg: number;
+  /** Wiederholungen des schwersten Satzes (bei Gleichstand: die meisten) */
+  top_reps: number;
+  volume: number;
+  sets: number;
+};
+
+/**
+ * Verlauf einer Übung, jüngste Einheiten zuerst begrenzt, zurückgegeben
+ * aber aufsteigend – so kann das Chart direkt von links nach rechts zeichnen.
+ */
+export async function getExerciseProgress(
+  db: DB,
+  exerciseId: string,
+  limit = 20,
+): Promise<ProgressPoint[]> {
+  const rows = await db.all<ProgressPoint>(sql`
+    SELECT wl.date                                   AS date,
+           MAX(sl.weight_kg)                         AS top_kg,
+           COALESCE(SUM(sl.reps * sl.weight_kg), 0)  AS volume,
+           COUNT(sl.id)                              AS sets,
+           (SELECT s2.reps
+              FROM set_logs s2
+             WHERE s2.workout_log_id = wl.id
+               AND s2.exercise_id = ${exerciseId}
+               AND s2.completed = 1
+             ORDER BY s2.weight_kg DESC, s2.reps DESC
+             LIMIT 1)                                AS top_reps
+    FROM set_logs sl
+    JOIN workout_logs wl ON wl.id = sl.workout_log_id
+    WHERE sl.exercise_id = ${exerciseId} AND sl.completed = 1
+    GROUP BY wl.id
+    ORDER BY wl.date DESC
+    LIMIT ${limit}
+  `);
+  return rows.reverse();
+}
+
+export type PersonalBest = { weight_kg: number; reps: number; date: number };
+
+/** Schwerster jemals abgehakter Satz dieser Übung (Tie-Break: mehr Wdh.). */
+export async function getPersonalBest(
+  db: DB,
+  exerciseId: string,
+): Promise<PersonalBest | null> {
+  const [row] = await db.all<PersonalBest>(sql`
+    SELECT sl.weight_kg, sl.reps, wl.date
+    FROM set_logs sl
+    JOIN workout_logs wl ON wl.id = sl.workout_log_id
+    WHERE sl.exercise_id = ${exerciseId} AND sl.completed = 1 AND sl.weight_kg > 0
+    ORDER BY sl.weight_kg DESC, sl.reps DESC
+    LIMIT 1
+  `);
+  return row ?? null;
+}
