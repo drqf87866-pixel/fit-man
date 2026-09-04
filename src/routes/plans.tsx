@@ -7,6 +7,7 @@ import { formatRelative, newId } from '../lib/format';
 import { CategoryBadge, EmptyState, Layout, PageHeader } from '../components/layout';
 import { TagBadges } from '../components/tags';
 import { MOVEMENT_LABELS, EQUIPMENT_LABELS } from '../lib/tags';
+import { ExerciseFilters } from '../components/filters';
 import { Icon } from '../components/icons';
 import type { AppEnv } from '../types';
 
@@ -166,22 +167,8 @@ app.get('/plans/new', async (c) => {
             />
           </div>
 
-          <div class="-mx-4 mb-3 flex gap-2 overflow-x-auto px-4 pb-1 no-scrollbar">
-            <button type="button" class="chip chip-active" data-plan-filter="">
-              Alle
-            </button>
-            {categories.map((cat) => (
-              <button type="button" class="chip" data-plan-filter={cat}>
-                {cat}
-              </button>
-            ))}
-            <span class="mx-1 w-px shrink-0 self-stretch bg-border" aria-hidden="true"></span>
-            <button type="button" class="chip" data-plan-filter="push">Push</button>
-            <button type="button" class="chip" data-plan-filter="pull">Pull</button>
-            <span class="mx-1 w-px shrink-0 self-stretch bg-border" aria-hidden="true"></span>
-            <button type="button" class="chip" data-plan-filter="freihantel">Freihantel</button>
-            <button type="button" class="chip" data-plan-filter="maschine">Maschine</button>
-            <button type="button" class="chip" data-plan-filter="koerpergewicht">Körpergewicht</button>
+          <div class="mb-3" data-plan-filters>
+            <ExerciseFilters categories={categories} />
           </div>
 
           <ul class="flex flex-col gap-2" data-plan-list>

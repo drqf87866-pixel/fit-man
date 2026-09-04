@@ -13,6 +13,7 @@ import {
   MOVEMENT_VALUES,
   EQUIPMENT_VALUES,
 } from '../lib/tags';
+import { ExerciseFilters } from '../components/filters';
 import type { AppEnv } from '../types';
 
 const app = new Hono<AppEnv>();
@@ -37,6 +38,8 @@ app.get('/exercises', async (c) => {
         </button>
       </PageHeader>
 
+      {/* Suche bleibt beim Scrollen stehen, die Filterzeilen scrollen mit weg –
+          vier klebende Zeilen würden auf dem Handy zu viel Platz kosten. */}
       <div class="sticky top-[73px] z-20 bg-bg/90 px-4 pt-3 pb-2 backdrop-blur-md">
         <div class="relative">
           <Icon
@@ -52,34 +55,10 @@ app.get('/exercises', async (c) => {
             autocomplete="off"
           />
         </div>
-        <div class="-mx-4 mt-3 flex gap-2 overflow-x-auto px-4 pb-1 no-scrollbar">
-          <button type="button" class="chip chip-active" data-ex-filter="">
-            Alle
-          </button>
-          {categories.map((cat) => (
-            <button type="button" class="chip" data-ex-filter={cat}>
-              {cat}
-            </button>
-          ))}
-          <span class="mx-1 w-px shrink-0 self-stretch bg-border" aria-hidden="true"></span>
-          {MOVEMENT_VALUES.map((value) => (
-            <button type="button" class="chip" data-ex-filter={value}>
-              {MOVEMENT_LABELS[value]}
-            </button>
-          ))}
-          <span class="mx-1 w-px shrink-0 self-stretch bg-border" aria-hidden="true"></span>
-          {EQUIPMENT_VALUES.map((value) => (
-            <button type="button" class="chip" data-ex-filter={value}>
-              {EQUIPMENT_LABELS[value]}
-            </button>
-          ))}
-          {customCount > 0 ? (
-            <button type="button" class="chip" data-ex-filter="__custom">
-              <Icon name="pencil" size={14} />
-              Eigene ({customCount})
-            </button>
-          ) : null}
-        </div>
+      </div>
+
+      <div class="px-4 pt-1 pb-2" data-ex-filters>
+        <ExerciseFilters categories={categories} customCount={customCount} />
       </div>
 
       <ul class="flex flex-col gap-2 px-4 py-3" data-ex-list>

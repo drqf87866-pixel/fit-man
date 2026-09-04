@@ -151,13 +151,19 @@
   }
 
   /** Gemeinsame Filter-Logik für Übungsbibliothek und Plan-Formular. */
-  function initFilterList({ searchSel, filterSel, itemSel, emptySel, countSel, matches }) {
+  /**
+   * Jede Filterzeile (data-filter-group) ist eine eigene Gruppe: innerhalb einer
+   * Zeile gilt Einfachauswahl, zwischen den Zeilen werden die Filter
+   * UND-verknüpft. `active` ist deshalb ein Objekt Gruppe -> Wert, ein leerer
+   * Wert bedeutet "diese Gruppe filtert nicht".
+   */
+  function initFilterList({ searchSel, chipSel, itemSel, emptySel, matches }) {
     const search = $(searchSel);
-    const chips = $$(filterSel);
+    const chips = $$(chipSel);
     const items = $$(itemSel);
     if (!items.length) return null;
 
-    let active = '';
+    const active = Object.create(null);
     const apply = () => {
       const q = (search?.value ?? '').trim().toLowerCase();
       let visible = 0;
@@ -174,13 +180,26 @@
     search?.addEventListener('input', apply);
     for (const chip of chips) {
       chip.addEventListener('click', () => {
-        active = chip.dataset.exFilter ?? chip.dataset.planFilter ?? '';
-        for (const other of chips) other.classList.toggle('chip-active', other === chip);
+        const group = chip.dataset.filterGroup;
+        active[group] = chip.dataset.filterValue ?? '';
+        for (const other of chips) {
+          if (other.dataset.filterGroup === group) {
+            other.classList.toggle('chip-active', other === chip);
+          }
+        }
         apply();
       });
     }
     apply();
-    return { apply, countSel };
+    return { apply };
+  }
+
+  /** Prüft die Tag-Gruppen, die sich Übungsbibliothek und Plan-Formular teilen. */
+  function matchesTags(item, active) {
+    if (active.category && item.dataset.category !== active.category) return false;
+    if (active.movement && item.dataset.movement !== active.movement) return false;
+    if (active.equipment && item.dataset.equipment !== active.equipment) return false;
+    return true;
   }
 
   // -------------------------------------------------------------------------
@@ -189,15 +208,12 @@
   function initExerciseLibrary() {
     initFilterList({
       searchSel: '[data-ex-search]',
-      filterSel: '[data-ex-filter]',
+      chipSel: '[data-ex-filters] [data-filter-group]',
       itemSel: '[data-ex-item]',
       emptySel: '[data-ex-empty]',
       matches: (item, q, active) => {
-        if (active === '__custom' && item.dataset.custom !== '1') return false;
-        if (active && active !== '__custom') {
-          const tags = [item.dataset.category, item.dataset.movement, item.dataset.equipment];
-          if (!tags.includes(active)) return false;
-        }
+        if (active.custom === '1' && item.dataset.custom !== '1') return false;
+        if (!matchesTags(item, active)) return false;
         return !q || item.dataset.search.includes(q);
       },
     });
@@ -212,14 +228,13 @@
 
     initFilterList({
       searchSel: '[data-plan-search]',
-      filterSel: '[data-plan-filter]',
+      chipSel: '[data-plan-filters] [data-filter-group]',
       itemSel: '[data-plan-item]',
       matches: (item, q, active) => {
+        // Bereits ausgewählte Übungen bleiben sichtbar, sonst verschwänden sie
+        // beim Filtern aus der Liste und wirkten abgewählt.
         if (item.querySelector('[data-plan-check]').checked) return true;
-        if (active) {
-          const tags = [item.dataset.category, item.dataset.movement, item.dataset.equipment];
-          if (!tags.includes(active)) return false;
-        }
+        if (!matchesTags(item, active)) return false;
         return !q || item.dataset.name.includes(q);
       },
     });
