@@ -1,0 +1,20 @@
+name = "fit-man"
+main = "src/index.tsx"
+compatibility_date = "2025-08-01"
+
+# Statische Assets (styles.css, app.js, manifest) werden direkt von der Edge
+# ausgeliefert. Alles was kein Asset ist, landet im Worker unten.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# Cloudflare D1 – SQLite at the Edge.
+# database_id nach `wrangler d1 create fit-man-db` hier eintragen.
+[[d1_databases]]
+binding = "DB"
+database_name = "fit-man-db"
+database_id = "1b6bc6d6-117f-4e18-843c-87dcd1d5c68c"
+migrations_dir = "drizzle"
+
+[observability]
+enabled = true
