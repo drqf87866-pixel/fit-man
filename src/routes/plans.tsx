@@ -1,14 +1,16 @@
 import { Hono } from 'hono';
-import { eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { createDb, type DB } from '../db';
-import { planExercises, workoutPlans, type Exercise } from '../db/schema';
+import {
+  exercises as exercisesTable,
+  planExercises,
+  workoutPlans,
+  type Exercise,
+} from '../db/schema';
 import { getPlanExercises, listExercises, listPlans, type PlanListRow } from '../lib/queries';
 import { formatRelative, newId } from '../lib/format';
-import { CategoryBadge, EmptyState, Layout, PageHeader } from '../components/layout';
-import { TagBadges } from '../components/tags';
-import { ExerciseThumb } from '../components/exercise-image';
-import { MOVEMENT_LABELS, EQUIPMENT_LABELS } from '../lib/tags';
-import { ExerciseFilters } from '../components/filters';
+import { EmptyState, Layout, PageHeader } from '../components/layout';
+import { PlanEditor, type PlanEditorItem } from '../components/plan-editor';
 import { Icon } from '../components/icons';
 import { geminiJson, GeminiError, geminiErrorKey, GEMINI_ERROR_TEXTS } from '../lib/gemini';
 import type { AppEnv } from '../types';
@@ -96,11 +98,9 @@ app.get('/', async (c) => {
           </ul>
         )}
 
-        <a href="/plans/new" class="btn-secondary mt-4 w-full">
-          <Icon name="plus" size={20} />
-          Neuen Plan erstellen
-        </a>
-        <a href="/plans/generate" class="btn-secondary mt-2 w-full">
+        {/* "Neuen Plan erstellen" steht schon als + in der Kopfzeile – hier nur
+            der KI-Einstieg, sonst konkurrieren drei Primäraktionen auf einem Screen. */}
+        <a href="/plans/generate" class="btn-secondary mt-4 w-full">
           <Icon name="sparkles" size={20} />
           Plan per KI erstellen
         </a>
@@ -110,228 +110,44 @@ app.get('/', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Plan-Builder-Formular (manuell & als KI-Vorbefüllung)
+// Neuen Plan erstellen  (GET /plans/new)
+// Der Editor zeigt nur die gewählten Übungen – die Bibliothek kommt aus dem
+// geteilten Picker-Sheet (public/app.js), nicht als zweite Liste im Formular.
 // ---------------------------------------------------------------------------
-type PlanBuilderFormProps = {
-  all: Exercise[];
-  initialName?: string;
-  initialDescription?: string;
-  /** exerciseId -> targetSets, vorbefüllt (z. B. von der KI) */
-  initialSelected?: Map<string, number>;
-  /** exerciseId -> sort_order; bestimmt die Startreihenfolge der Auswahl */
-  initialOrder?: Map<string, number>;
-  /** Ziel des Formulars – POST /plans (neu) oder POST /plans/:id (bearbeiten) */
-  action?: string;
-  submitLabel?: string;
-  /** Blendet den "KI-generiert"-Hinweis + "Neue Idee"-Link ein */
-  aiHint?: boolean;
-};
 
-/** Ausgewählte Übungen zuerst, in Plan-Reihenfolge – danach der Rest wie gehabt. */
-function orderForBuilder(
-  all: Exercise[],
-  selected: Map<string, number>,
-  order: Map<string, number>,
-): Exercise[] {
-  // Ohne explizites sort_order (z. B. KI-Entwurf) zählt die Einfügereihenfolge
-  // der Auswahl – die trägt beim Generator die gewünschte Übungsabfolge.
-  const fallback = new Map([...selected.keys()].map((id, i) => [id, i] as const));
-  const rank = (e: Exercise) =>
-    selected.has(e.id)
-      ? (order.get(e.id) ?? fallback.get(e.id) ?? 0)
-      : Number.MAX_SAFE_INTEGER;
-  return all
-    .map((e, i) => ({ e, i }))
-    .sort((a, b) => rank(a.e) - rank(b.e) || a.i - b.i)
-    .map((x) => x.e);
+/** getPlanExercises()-Zeilen und Bibliothekseinträge auf die Editor-Form bringen. */
+function toEditorItem(ex: Exercise, targetSets = 3): PlanEditorItem {
+  return {
+    exerciseId: ex.id,
+    name: ex.name,
+    category: ex.category,
+    targetMuscle: ex.targetMuscle,
+    movement: ex.movement,
+    equipment: ex.equipment,
+    image: ex.image,
+    targetSets,
+  };
 }
 
-const PlanBuilderForm = ({
-  all,
-  initialName = '',
-  initialDescription = '',
-  initialSelected = new Map<string, number>(),
-  initialOrder = new Map<string, number>(),
-  action = '/plans',
-  submitLabel = 'Plan speichern',
-  aiHint = false,
-}: PlanBuilderFormProps) => {
-  const categories = [...new Set(all.map((e) => e.category))];
-  const sel = (id: string) => initialSelected.get(id);
-  const items = orderForBuilder(all, initialSelected, initialOrder);
-  return (
-    <form method="post" action={action} class="flex flex-col gap-5 px-4 py-4" data-plan-form>
-      {aiHint ? (
-        <div class="flex items-start gap-3 rounded-2xl border border-accent/30 bg-accent-soft px-4 py-3">
-          <Icon name="sparkles" size={18} class="mt-0.5 shrink-0 text-accent" />
-          <p class="text-sm text-accent">
-            KI-generierter Entwurf. Passe Übungen und Sätze an oder entferne welche – gespeichert
-            wird wie gewohnt.
-          </p>
-        </div>
-      ) : null}
-
-      <div>
-        <label class="label" for="name">
-          Name des Plans
-        </label>
-        <input
-          class="input"
-          id="name"
-          name="name"
-          required
-          maxlength={60}
-          placeholder="z. B. Push Day A"
-          autocomplete="off"
-          value={initialName}
-        />
-      </div>
-
-      {/* Beschreibung wird nicht mehr getippt: KI-Entwurf bzw. Bestand wandert
-          unverändert mit, damit Speichern sie nicht verwirft. */}
-      <input type="hidden" name="description" value={initialDescription} />
-
-      <div>
-        <div class="mb-2 flex items-baseline justify-between">
-          <span class="label mb-0">Übungen auswählen</span>
-          <span class="text-sm font-semibold text-accent" data-plan-count>
-            0 ausgewählt
-          </span>
-        </div>
-
-        <div class="relative mb-3">
-          <Icon
-            name="search"
-            size={18}
-            class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted"
-          />
-          <input
-            class="input pl-10"
-            type="search"
-            placeholder="Übung suchen"
-            data-plan-search
-            autocomplete="off"
-          />
-        </div>
-
-        <div class="mb-3" data-plan-filters>
-          <ExerciseFilters categories={categories} />
-        </div>
-
-        <ul class="flex flex-col gap-2" data-plan-list>
-          {items.map((ex, index) => {
-            const sets = sel(ex.id);
-            const checked = sets !== undefined;
-            const itemClass = `rounded-xl border bg-surface ${
-              checked ? 'border-accent' : 'border-border'
-            }`;
-            return (
-              <li
-                class={itemClass}
-                data-plan-item
-                data-category={ex.category}
-                data-movement={ex.movement}
-                data-equipment={ex.equipment}
-                data-name={`${ex.name} ${MOVEMENT_LABELS[ex.movement] ?? ''} ${EQUIPMENT_LABELS[ex.equipment] ?? ''}`.toLowerCase()}
-              >
-                <label class="flex touch cursor-pointer items-center gap-3 p-3">
-                  <input
-                    type="checkbox"
-                    name="exerciseId"
-                    value={ex.id}
-                    class="size-6 shrink-0 accent-[var(--color-accent)]"
-                    data-plan-check
-                    checked={checked}
-                  />
-                  <ExerciseThumb image={ex.image} category={ex.category} class="size-10 rounded-lg" />
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate font-medium">{ex.name}</span>
-                    <span class="block truncate text-xs text-muted">{ex.targetMuscle}</span>
-                    <TagBadges movement={ex.movement} equipment={ex.equipment} />
-                  </span>
-                  <CategoryBadge category={ex.category} custom={ex.isCustom} />
-                </label>
-                <div
-                  class={`${checked ? 'flex' : 'hidden'} items-center gap-2 border-t border-border px-3 py-2`}
-                  data-plan-sets
-                >
-                  {/* Position im Plan – wird von app.js beim Sortieren durchnummeriert. */}
-                  <input type="hidden" name={`order_${ex.id}`} value={index} data-plan-order />
-                  <button
-                    type="button"
-                    class="btn-secondary !min-w-11 !px-0"
-                    data-order-up
-                    aria-label={`${ex.name} nach oben`}
-                  >
-                    <Icon name="chevronUp" size={18} />
-                  </button>
-                  <button
-                    type="button"
-                    class="btn-secondary !min-w-11 !px-0"
-                    data-order-down
-                    aria-label={`${ex.name} nach unten`}
-                  >
-                    <Icon name="chevronDown" size={18} />
-                  </button>
-                  <span class="text-sm text-muted">Sätze</span>
-                  <div class="ml-auto flex items-center gap-1">
-                    <button type="button" class="btn-secondary !min-w-11 !px-0" data-sets-dec>
-                      <Icon name="minus" size={18} />
-                    </button>
-                    <input
-                      type="number"
-                      name={`targetSets_${ex.id}`}
-                      value={checked ? sets : 3}
-                      min="1"
-                      max="20"
-                      inputmode="numeric"
-                      class="input w-16 text-center font-bold tabular-nums"
-                      data-sets-input
-                    />
-                    <button type="button" class="btn-secondary !min-w-11 !px-0" data-sets-inc>
-                      <Icon name="plus" size={18} />
-                    </button>
-                  </div>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
-
-      {aiHint ? (
-        <div class="flex flex-col gap-2">
-          <button type="submit" class="btn-primary w-full shadow-xl">
-            <Icon name="save" size={20} />
-            {submitLabel}
-          </button>
-          <a href="/plans/generate" class="btn-ghost w-full text-center">
-            Neue Idee (erneut generieren)
-          </a>
-        </div>
-      ) : (
-        <div class="sticky bottom-24 z-20">
-          <button type="submit" class="btn-primary w-full shadow-xl">
-            <Icon name="save" size={20} />
-            {submitLabel}
-          </button>
-        </div>
-      )}
-    </form>
-  );
-};
-
-// ---------------------------------------------------------------------------
-// Neuen Plan erstellen (manuell)
-// ---------------------------------------------------------------------------
 app.get('/plans/new', async (c) => {
   const db = createDb(c.env.DB);
-  const all = await listExercises(db);
+
+  // ?exercise=<id> kommt von "Neuer Plan mit dieser Übung" aus der Bibliothek.
+  const seedId = c.req.query('exercise');
+  let items: PlanEditorItem[] = [];
+  if (seedId) {
+    const [ex] = await db
+      .select()
+      .from(exercisesTable)
+      .where(eq(exercisesTable.id, seedId))
+      .limit(1);
+    if (ex) items = [toEditorItem(ex)];
+  }
 
   return c.html(
     <Layout title="Neuer Plan" active="training">
       <PageHeader title="Neuer Plan" back="/" />
-      <PlanBuilderForm all={all} />
+      <PlanEditor items={items} action="/plans" />
     </Layout>,
   );
 });
@@ -552,11 +368,11 @@ app.post('/plans/generate', async (c) => {
           <Icon name="sparkles" size={20} />
         </a>
       </PageHeader>
-      <PlanBuilderForm
-        all={all}
-        initialName={name.slice(0, 60)}
-        initialDescription={description.slice(0, 200)}
-        initialSelected={selected}
+      <PlanEditor
+        items={[...selected].map(([id, sets]) => toEditorItem(byId.get(id)!, sets))}
+        name={name.slice(0, 60)}
+        description={description.slice(0, 200)}
+        action="/plans"
         aiHint
       />
     </Layout>,
@@ -564,7 +380,9 @@ app.post('/plans/generate', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Plan-Detail
+// Plan-Detail = Verwaltungsoberfläche  (GET /plans/:id)
+// Starten, Übungen sortieren, Sätze ändern, hinzufügen/entfernen, löschen –
+// alles auf einem Screen. Ein separater /edit-Screen entfällt.
 // ---------------------------------------------------------------------------
 app.get('/plans/:id', async (c) => {
   const db = createDb(c.env.DB);
@@ -577,57 +395,29 @@ app.get('/plans/:id', async (c) => {
 
   return c.html(
     <Layout title={plan.name} active="training">
-      <PageHeader title={plan.name} subtitle={plan.description || undefined} back="/">
-        <a
-          href={`/plans/${plan.id}/edit`}
-          class="btn-secondary !px-3"
-          aria-label="Plan bearbeiten"
-        >
-          <Icon name="pencil" size={20} />
-        </a>
-      </PageHeader>
+      <PageHeader title={plan.name} subtitle={plan.description || undefined} back="/" />
 
       <div class="px-4 py-4">
-        <a href={`/workout/active?plan=${plan.id}`} class="btn-primary !h-14 w-full text-lg">
+        {/* Außerhalb des Editor-Formulars – Formulare dürfen nicht verschachtelt
+            werden. Der Dirty-Guard in app.js warnt vor ungespeicherten Änderungen. */}
+        <a
+          href={`/workout/active?plan=${plan.id}`}
+          class="btn-primary !h-14 w-full text-lg"
+          data-plan-start
+        >
           <Icon name="play" size={22} />
           Training starten
         </a>
       </div>
 
-      <section class="px-4">
-        <h2 class="mb-3 text-sm font-semibold tracking-wide text-muted uppercase">
-          Übungen ({items.length})
-        </h2>
-        {items.length === 0 ? (
-          <p class="text-sm text-muted">Dieser Plan enthält noch keine Übungen.</p>
-        ) : (
-          <ol class="flex flex-col gap-2">
-            {items.map((it, i) => (
-              <li class="card flex items-center gap-3 !p-3">
-                <a
-                  href={`/exercises/${it.exerciseId}?from=/plans/${plan.id}`}
-                  class="flex min-w-0 flex-1 items-center gap-3"
-                >
-                  <span class="relative shrink-0">
-                    <ExerciseThumb image={it.image} category={it.category} class="size-11 rounded-lg" iconSize={20} />
-                    <span class="absolute -top-1 -left-1 grid size-5 place-items-center rounded-full bg-surface-2 text-[11px] font-bold text-muted ring-2 ring-surface tabular-nums">
-                      {i + 1}
-                    </span>
-                  </span>
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate font-semibold">{it.name}</span>
-                    <span class="block truncate text-xs text-muted">{it.targetMuscle}</span>
-                    <TagBadges movement={it.movement} equipment={it.equipment} />
-                  </span>
-                </a>
-                <span class="shrink-0 rounded-lg bg-surface-2 px-2.5 py-1 text-xs font-bold text-accent tabular-nums">
-                  {it.targetSets} Sätze
-                </span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </section>
+      <PlanEditor
+        items={items}
+        name={plan.name}
+        description={plan.description}
+        action={`/plans/${plan.id}`}
+        submitLabel="Änderungen speichern"
+        detailFrom={`/plans/${plan.id}`}
+      />
 
       <div class="px-4 py-6">
         <form
@@ -645,34 +435,52 @@ app.get('/plans/:id', async (c) => {
   );
 });
 
-// ---------------------------------------------------------------------------
-// Plan bearbeiten  (GET /plans/:id/edit, POST /plans/:id)
-// ---------------------------------------------------------------------------
-app.get('/plans/:id/edit', async (c) => {
+// Alte Lesezeichen: Bearbeiten passiert jetzt direkt auf der Plan-Seite.
+app.get('/plans/:id/edit', (c) => c.redirect(`/plans/${c.req.param('id')}`, 302));
+
+/**
+ * Einzelne Übung an einen Plan anhängen – Einstieg "Zu Plan hinzufügen" aus der
+ * Übungsbibliothek. Reihenfolge: hinten dran; schon vorhandene Übungen werden
+ * still übersprungen, damit ein Doppeltipp keinen Dublette anlegt.
+ */
+app.post('/plans/:id/exercises', async (c) => {
   const db = createDb(c.env.DB);
   const id = c.req.param('id');
+  const form = await c.req.formData();
+  const exerciseId = String(form.get('exerciseId') ?? '').trim();
 
   const [plan] = await db.select().from(workoutPlans).where(eq(workoutPlans.id, id)).limit(1);
   if (!plan) return c.notFound();
 
-  const items = await getPlanExercises(db, id);
-  const all = await listExercises(db);
+  const [ex] = await db
+    .select({ id: exercisesTable.id })
+    .from(exercisesTable)
+    .where(eq(exercisesTable.id, exerciseId))
+    .limit(1);
+  if (!ex) return c.redirect(`/plans/${id}`, 303);
 
-  return c.html(
-    <Layout title="Plan bearbeiten" active="training">
-      <PageHeader title="Plan bearbeiten" subtitle={plan.name} back={`/plans/${plan.id}`} />
-      <PlanBuilderForm
-        all={all}
-        initialName={plan.name}
-        initialDescription={plan.description}
-        initialSelected={new Map(items.map((it) => [it.exerciseId, it.targetSets]))}
-        initialOrder={new Map(items.map((it) => [it.exerciseId, it.order]))}
-        action={`/plans/${plan.id}`}
-        submitLabel="Änderungen speichern"
-      />
-    </Layout>,
+  const [existing] = await db
+    .select({ id: planExercises.id })
+    .from(planExercises)
+    .where(and(eq(planExercises.planId, id), eq(planExercises.exerciseId, exerciseId)))
+    .limit(1);
+  if (existing) return c.redirect(`/plans/${id}`, 303);
+
+  const [row] = await db.all<{ next: number }>(
+    sql`SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM plan_exercises WHERE plan_id = ${id}`,
   );
+
+  await db.insert(planExercises).values({
+    id: newId('pe'),
+    planId: id,
+    exerciseId,
+    order: row?.next ?? 0,
+    targetSets: 3,
+  });
+
+  return c.redirect(`/plans/${id}`, 303);
 });
+
 
 app.post('/plans/:id', async (c) => {
   const db = createDb(c.env.DB);

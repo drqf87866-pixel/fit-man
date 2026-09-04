@@ -19,17 +19,38 @@ Frontend und Backend laufen im selben Worker: Hono rendert die Seiten serverseit
 
 | Route              | Inhalt                                                              |
 | ------------------ | ------------------------------------------------------------------- |
-| `/`                | Trainingspläne, Schnellstart, „Neuen Plan erstellen"                 |
-| `/plans/new`       | Plan anlegen: Name, Beschreibung, Übungsauswahl mit Ziel-Sätzen      |
-| `/plans/:id`       | Plandetail, „Training starten", Plan löschen                        |
+| `/`                | Trainingspläne, Schnellstart, KI-Plan                                |
+| `/plans/new`       | Plan anlegen: Name + Übungen aus dem Picker-Sheet                    |
+| `/plans/:id`       | Plan verwalten: starten, sortieren, Sätze, hinzufügen, löschen       |
 | `/workout/active`  | Aktiver Tracker: Sätze, Vorwerte, Rest-Timer, Workout beenden        |
 | `/exercises`       | Übungsbibliothek: Suche, Kategoriefilter, eigene Übungen             |
-| `/exercises/:id`   | Übungsdetail: Start-/Endposition, Erklärung, Zielmuskel und Tags     |
+| `/exercises/:id`   | Übungsdetail: Bilder, Erklärung, Fortschritt, „Zu Plan hinzufügen"   |
 | `/history`         | Verlauf mit Kennzahlen                                               |
 | `/history/:id`     | Detailansicht eines Workouts (alle Sätze, Gewichte, Wiederholungen)  |
 
 Bottom-Navigation (fix, `env(safe-area-inset-bottom)`-bewusst): **Training ·
 Übungen · Verlauf**.
+
+### Wer macht was
+
+Die Übungsbibliothek wird genau **einmal** als Seite gerendert (`/exercises`).
+Zusammengestellt werden Pläne nicht über eine zweite Bibliotheksliste im
+Formular, sondern über ein gemeinsames Picker-Bottom-Sheet
+(`openExercisePicker()` in `public/app.js`), das sich Plan-Editor und aktives
+Workout teilen. Entsprechend:
+
+| Fläche | Aufgabe |
+| ------ | ------- |
+| **Training** (`/`, `/plans/*`) | Pläne erstellen, verwalten, starten |
+| **Picker-Sheet** | die eine Auswahl-Oberfläche (Suche + Filterchips) |
+| **Übungen** (`/exercises/*`) | Nachschlagen, Fortschritt/1RM, eigene Übungen, „Zu Plan hinzufügen" |
+
+`/plans/:id` ist zugleich die Verwaltungsoberfläche – Reihenfolge, Ziel-Sätze,
+Übungen hinzufügen/entfernen passieren dort direkt; einen eigenen
+`/plans/:id/edit`-Screen gibt es nicht mehr (die Route leitet weiter). Der
+Plan-Editor rendert nur die **gewählten** Übungen, neue Zeilen entstehen im
+Client aus einer serverseitig gerenderten `<template>`-Vorlage – das
+Zeilenmarkup existiert dadurch nur an einer Stelle.
 
 ### Aktiver Workout-Tracker
 
@@ -256,7 +277,7 @@ src/
     schema.ts            Drizzle-Schema für D1
     index.ts             Drizzle-Client pro Request
   routes/
-    plans.tsx            /  ·  /plans/new  ·  /plans/:id
+    plans.tsx            /  ·  /plans/new  ·  /plans/:id  ·  /plans/generate
     exercises.tsx        /exercises  ·  POST /exercises  ·  GET /api/exercises
     workout.tsx          /workout/active  ·  POST /api/workouts (Batch-Insert)
     history.tsx          /history  ·  /history/:id

@@ -7,6 +7,7 @@ import {
   getExerciseProgress,
   getPersonalBest,
   listExercises,
+  listPlans,
 } from '../lib/queries';
 import { estimateOneRepMax, formatDateShort, formatVolume, formatWeight, newId } from '../lib/format';
 import { CategoryBadge, Layout, PageHeader } from '../components/layout';
@@ -236,9 +237,10 @@ app.get('/exercises/:id', async (c) => {
   const [ex] = await db.select().from(exercises).where(eq(exercises.id, id)).limit(1);
   if (!ex) return c.notFound();
 
-  const [progress, best] = await Promise.all([
+  const [progress, best, plans] = await Promise.all([
     getExerciseProgress(db, id),
     getPersonalBest(db, id),
+    listPlans(db),
   ]);
   const oneRm = best ? estimateOneRepMax(best.weight_kg, best.reps) : null;
 
@@ -246,10 +248,21 @@ app.get('/exercises/:id', async (c) => {
   // Nur repo-interne Pfade zulassen, damit der Link nicht nach außen zeigt.
   const fromRaw = c.req.query('from') ?? '';
   const back = fromRaw.startsWith('/') && !fromRaw.startsWith('//') ? fromRaw : '/exercises';
+  // Aus einem Plan heraus geöffnet gehört die Seite zum Training-Tab.
+  const tab = back.startsWith('/plans') ? 'training' : 'exercises';
 
   return c.html(
-    <Layout title={ex.name} active="exercises">
-      <PageHeader title={ex.name} subtitle={ex.category} back={back} />
+    <Layout title={ex.name} active={tab}>
+      <PageHeader title={ex.name} subtitle={ex.category} back={back}>
+        <button
+          type="button"
+          class="btn-secondary !px-3"
+          data-open-dialog="add-to-plan"
+          aria-label="Zu Plan hinzufügen"
+        >
+          <Icon name="plus" size={20} />
+        </button>
+      </PageHeader>
 
       {ex.image ? (
         <div class="grid grid-cols-2 gap-2 px-4 pt-4">
@@ -372,6 +385,55 @@ app.get('/exercises/:id', async (c) => {
       ) : (
         <div class="pb-6" />
       )}
+
+      {/* Bottom-Sheet: Übung an einen bestehenden Plan anhängen. Gleiches Muster
+          wie "Eigene Übung" in der Bibliothek, gesteuert von initDialogs(). */}
+      <div
+        class="fixed inset-0 z-50 hidden items-end bg-black/60 backdrop-blur-sm"
+        data-dialog="add-to-plan"
+      >
+        <div class="mx-auto flex max-h-[85dvh] w-full max-w-lg flex-col rounded-t-3xl border-t border-border bg-surface p-4 pb-8 safe-bottom">
+          <div class="mx-auto mb-4 h-1 w-10 rounded-full bg-border"></div>
+          <div class="mb-4 flex items-center justify-between">
+            <h2 class="text-lg font-bold">Zu Plan hinzufügen</h2>
+            <button
+              type="button"
+              class="btn-ghost !min-w-11 !px-0"
+              data-close-dialog
+              aria-label="Schließen"
+            >
+              <Icon name="x" size={22} />
+            </button>
+          </div>
+
+          <ul class="-mx-1 flex flex-1 flex-col gap-2 overflow-y-auto px-1">
+            {plans.map((p) => (
+              <li>
+                <form method="post" action={`/plans/${p.id}/exercises`}>
+                  <input type="hidden" name="exerciseId" value={ex.id} />
+                  <button
+                    type="submit"
+                    class="flex w-full touch items-center gap-3 rounded-xl border border-border bg-surface-2 p-3 text-left"
+                  >
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate font-semibold">{p.name}</span>
+                      <span class="block text-xs text-muted">
+                        {p.exercise_count} {p.exercise_count === 1 ? 'Übung' : 'Übungen'}
+                      </span>
+                    </span>
+                    <Icon name="plus" size={20} class="shrink-0 text-accent" />
+                  </button>
+                </form>
+              </li>
+            ))}
+          </ul>
+
+          <a href={`/plans/new?exercise=${ex.id}`} class="btn-secondary mt-3 w-full">
+            <Icon name="plus" size={20} />
+            Neuer Plan mit dieser Übung
+          </a>
+        </div>
+      </div>
     </Layout>,
   );
 });

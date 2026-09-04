@@ -225,6 +225,172 @@
   }
 
   // -------------------------------------------------------------------------
+  // Geteiltes Übungs-Picker-Sheet
+  //
+  // Die einzige Auswahl-Oberfläche der App: Plan-Editor und aktives Workout
+  // öffnen dasselbe Sheet. Die Bibliothek wird dadurch nirgends ein zweites Mal
+  // als Liste gerendert.
+  // -------------------------------------------------------------------------
+  let libraryCache = null;
+
+  /** Bibliothek einmalig laden (der Plan-Editor bekommt sie nicht im HTML mit). */
+  async function loadLibrary() {
+    if (!libraryCache) {
+      const res = await fetch('/api/exercises', { headers: { accept: 'application/json' } });
+      if (!res.ok) throw new Error('library');
+      libraryCache = await res.json();
+    }
+    return libraryCache;
+  }
+
+  /** Filterzeile – Gegenstück zu <FilterRow> in src/components/filters.tsx. */
+  const filterRow = (label, group, options) => `
+    <div>
+      <p class="mb-1 text-[10px] font-bold tracking-wider text-muted uppercase">${esc(label)}</p>
+      <div class="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 no-scrollbar">
+        <button type="button" class="chip chip-active" data-filter-group="${group}" data-filter-value="">Alle</button>
+        ${options
+          .map(
+            (o) =>
+              `<button type="button" class="chip" data-filter-group="${group}" data-filter-value="${esc(o.value)}">${esc(o.label)}</button>`,
+          )
+          .join('')}
+      </div>
+    </div>`;
+
+  /** Chips aus dem tatsächlichen Bestand – leere Gruppen entfallen. */
+  function pickerFilters(items) {
+    const uniq = (key) => [...new Set(items.map((ex) => ex[key]).filter(Boolean))];
+    const rows = [
+      filterRow(
+        'Muskelgruppe',
+        'category',
+        uniq('category')
+          .sort((a, b) => a.localeCompare(b, 'de'))
+          .map((v) => ({ value: v, label: v })),
+      ),
+    ];
+    const movements = uniq('movement');
+    if (movements.length > 1) {
+      rows.push(
+        filterRow(
+          'Bewegung',
+          'movement',
+          movements.map((v) => ({ value: v, label: MOVEMENT_LABELS[v] ?? v })),
+        ),
+      );
+    }
+    const equipment = uniq('equipment');
+    if (equipment.length > 1) {
+      rows.push(
+        filterRow(
+          'Equipment',
+          'equipment',
+          equipment.map((v) => ({ value: v, label: EQUIPMENT_LABELS[v] ?? v })),
+        ),
+      );
+    }
+    return rows.join('');
+  }
+
+  /**
+   * Bottom-Sheet zur Übungsauswahl.
+   * `library` ist optional (das Workout hat sie im Payload), `exclude` sind
+   * bereits verwendete IDs, `onPick` bekommt den Bibliothekseintrag.
+   */
+  async function openExercisePicker({ title, library, exclude, onPick, newExerciseHref } = {}) {
+    let list = library;
+    if (!list) {
+      try {
+        list = await loadLibrary();
+      } catch {
+        window.alert('Die Übungsbibliothek konnte nicht geladen werden.');
+        return;
+      }
+    }
+
+    const skip = exclude instanceof Set ? exclude : new Set(exclude ?? []);
+    const items = list.filter((ex) => !skip.has(ex.id));
+
+    const overlay = document.createElement('div');
+    overlay.className = 'fixed inset-0 z-50 flex items-end bg-black/60 backdrop-blur-sm';
+    overlay.innerHTML = `
+      <div class="mx-auto flex max-h-[85dvh] w-full max-w-lg flex-col rounded-t-3xl border-t border-border bg-surface pb-6 safe-bottom">
+        <div class="mx-auto mt-3 mb-3 h-1 w-10 rounded-full bg-border"></div>
+        <div class="flex items-center gap-2 px-4 pb-3">
+          <h2 class="flex-1 text-lg font-bold">${esc(title ?? 'Übung hinzufügen')}</h2>
+          <button type="button" class="btn-ghost !min-w-11 !px-0" data-picker-close aria-label="Schließen">
+            ${icon('x', 22)}
+          </button>
+        </div>
+        <div class="relative px-4 pb-3">
+          <span class="pointer-events-none absolute left-7 top-1/2 -translate-y-1/2 text-muted">${icon('search', 18)}</span>
+          <input class="input pl-10" type="search" placeholder="Übung oder Muskel suchen" data-picker-search autocomplete="off">
+        </div>
+        <div class="flex flex-col gap-2 px-4 pb-3" data-picker-filters>${pickerFilters(items)}</div>
+        <ul class="flex-1 overflow-y-auto px-4" data-picker-list>
+          ${items
+            .map(
+              (ex) => `
+            <li data-picker-item
+                data-category="${esc(ex.category)}"
+                data-movement="${esc(ex.movement)}"
+                data-equipment="${esc(ex.equipment)}"
+                data-search="${esc((ex.name + ' ' + ex.targetMuscle + ' ' + ex.category + ' ' + (MOVEMENT_LABELS[ex.movement] ?? '') + ' ' + (EQUIPMENT_LABELS[ex.equipment] ?? '')).toLowerCase())}">
+              <button type="button" class="flex w-full touch items-center gap-3 border-b border-border/60 py-3 text-left" data-picker-pick="${esc(ex.id)}">
+                ${exerciseThumb(ex.image, ex.category, 'size-10 rounded-lg')}
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate font-semibold">${esc(ex.name)}</span>
+                  <span class="block truncate text-xs text-muted">${esc(ex.targetMuscle || ex.category)}</span>
+                  ${tagBadges(ex.movement, ex.equipment) ? `<span class="mt-1 flex flex-wrap gap-1">${tagBadges(ex.movement, ex.equipment)}</span>` : ''}
+                </span>
+                <span class="shrink-0 rounded-md bg-surface-2 px-2 py-0.5 text-[11px] font-semibold text-muted">${esc(ex.category)}</span>
+              </button>
+            </li>`,
+            )
+            .join('')}
+        </ul>
+        <p class="${items.length ? 'hidden ' : ''}px-4 py-8 text-center text-sm text-muted" data-picker-empty>
+          ${items.length ? 'Keine Übung gefunden.' : 'Alle Übungen der Bibliothek sind schon im Plan.'}
+        </p>
+        ${
+          newExerciseHref
+            ? `<div class="px-4 pt-3"><a href="${esc(newExerciseHref)}" class="btn-secondary w-full">${icon('plus', 18)} Neue Übung anlegen</a></div>`
+            : ''
+        }
+      </div>`;
+
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+
+    const close = () => {
+      overlay.remove();
+      document.body.style.overflow = '';
+    };
+
+    initFilterList({
+      searchSel: '[data-picker-search]',
+      chipSel: '[data-picker-filters] [data-filter-group]',
+      itemSel: '[data-picker-item]',
+      emptySel: '[data-picker-empty]',
+      matches: (item, q, active) =>
+        matchesTags(item, active) && (!q || item.dataset.search.includes(q)),
+    });
+
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay || e.target.closest('[data-picker-close]')) return close();
+      const pick = e.target.closest('[data-picker-pick]');
+      if (!pick) return;
+      const ex = items.find((x) => x.id === pick.dataset.pickerPick);
+      close();
+      if (ex) onPick?.(ex);
+    });
+
+    setTimeout(() => $('[data-picker-search]', overlay)?.focus(), 60);
+  }
+
+
+  // -------------------------------------------------------------------------
   // Übungsbibliothek (/exercises)
   // -------------------------------------------------------------------------
   function initExerciseLibrary() {
@@ -242,80 +408,113 @@
   }
 
   // -------------------------------------------------------------------------
-  // Plan-Formular (/plans/new)
+  // Plan-Editor (/plans/new, /plans/:id)
+  //
+  // Das Formular enthält nur die gewählten Übungen. Hinzufügen läuft über das
+  // geteilte Picker-Sheet, neue Zeilen entstehen aus der serverseitig
+  // gerenderten <template>-Vorlage – das Zeilenmarkup existiert nur einmal.
   // -------------------------------------------------------------------------
+  const LEAVE_WARNING = 'Ungespeicherte Änderungen am Plan gehen verloren. Trotzdem weiter?';
+
   function initPlanForm() {
     const form = $('[data-plan-form]');
     if (!form) return;
 
-    initFilterList({
-      searchSel: '[data-plan-search]',
-      chipSel: '[data-plan-filters] [data-filter-group]',
-      itemSel: '[data-plan-item]',
-      matches: (item, q, active) => {
-        // Bereits ausgewählte Übungen bleiben sichtbar, sonst verschwänden sie
-        // beim Filtern aus der Liste und wirkten abgewählt.
-        if (item.querySelector('[data-plan-check]').checked) return true;
-        if (!matchesTags(item, active)) return false;
-        return !q || item.dataset.name.includes(q);
-      },
-    });
+    const list = $('[data-plan-list]', form);
+    const counter = $('[data-plan-count]', form);
+    const emptyHint = $('[data-plan-empty]', form);
+    const tpl = $('[data-plan-row-tpl]', form);
+    const rows = () => $$('[data-plan-item]', list);
 
-    const list = $('[data-plan-list]');
-    const counter = $('[data-plan-count]');
-    const isChecked = (item) => item.querySelector('[data-plan-check]').checked;
-    const checkedItems = () => $$('[data-plan-item]', list).filter(isChecked);
+    let dirty = false;
+    const markDirty = () => {
+      dirty = true;
+    };
 
     /**
-     * Ausgewählte Übungen stehen immer oben in Plan-Reihenfolge; die
-     * order_<id>-Hiddens werden dabei auf 0..n-1 durchnummeriert. Sie sind die
-     * einzige Quelle der Reihenfolge für den Server – die DOM-Reihenfolge von
-     * getAll('exerciseId') wäre die Bibliothekssortierung.
+     * Reihenfolge, Positionsnummern und Zähler nachziehen. Die
+     * order_<id>-Hiddens sind die einzige Quelle der Reihenfolge für den Server.
      */
-    const renumber = () => {
-      checkedItems().forEach((item, i) => {
+    const refresh = () => {
+      const items = rows();
+      items.forEach((item, i) => {
         item.querySelector('[data-plan-order]').value = String(i);
+        const pos = item.querySelector('[data-plan-position]');
+        if (pos) pos.textContent = String(i + 1);
       });
-    };
-
-    const refreshCount = () => {
-      const n = checkedItems().length;
-      if (counter) counter.textContent = `${n} ausgewählt`;
-    };
-
-    form.addEventListener('change', (e) => {
-      const check = e.target.closest('[data-plan-check]');
-      if (!check) return;
-      const item = check.closest('[data-plan-item]');
-      const sets = item.querySelector('[data-plan-sets]');
-      sets.classList.toggle('hidden', !check.checked);
-      sets.classList.toggle('flex', check.checked);
-      item.classList.toggle('border-accent', check.checked);
-      // Neu angehakte Übungen ans Ende der Auswahl, abgewählte hinter die Auswahl.
-      const selected = checkedItems();
-      if (check.checked) {
-        const last = selected[selected.length - 1];
-        if (last && last !== item) last.after(item);
-      } else {
-        const last = selected[selected.length - 1];
-        if (last) last.after(item);
+      if (counter) {
+        counter.textContent = `${items.length} ${items.length === 1 ? 'Übung' : 'Übungen'}`;
       }
-      renumber();
-      refreshCount();
+      if (emptyHint) emptyHint.classList.toggle('hidden', items.length > 0);
+    };
+
+    /** Zeile aus der Vorlage bauen und ans Ende des Plans hängen. */
+    const addRow = (ex) => {
+      if (!tpl) return;
+      const holder = document.createElement('template');
+      holder.innerHTML = tpl.innerHTML
+        .replaceAll('__ID__', esc(ex.id))
+        .replaceAll('__NAME__', esc(ex.name))
+        .replaceAll('__CATEGORY__', esc(ex.category))
+        .replaceAll('__MUSCLE__', esc(ex.targetMuscle || ex.category))
+        .replaceAll('__IMAGE__', esc(ex.image))
+        .trim();
+      const row = holder.content.firstElementChild;
+      if (!row) return;
+
+      // Eigene Übungen haben keinen Bild-Slug – direkt aufs Fallback, statt
+      // erst einen 404 zu provozieren.
+      const img = row.querySelector('img');
+      if (img && !ex.image) img.src = '/img/exercise-fallback.svg';
+
+      const tags = row.querySelector('[data-plan-tags]');
+      if (tags) tags.innerHTML = tagBadges(ex.movement, ex.equipment);
+
+      list.appendChild(row);
+      markDirty();
+      refresh();
+      row.scrollIntoView({ block: 'nearest' });
+    };
+
+    $('[data-plan-add]', form)?.addEventListener('click', () => {
+      openExercisePicker({
+        title: 'Übung hinzufügen',
+        exclude: new Set(rows().map((r) => r.dataset.exerciseId)),
+        onPick: addRow,
+      });
     });
 
+    form.addEventListener('input', markDirty);
+
     form.addEventListener('click', (e) => {
+      // Der Zeilen-Link führt zur Übungsdetailseite – auch hier wären
+      // ungespeicherte Änderungen sonst still weg.
+      const link = e.target.closest('a[href]');
+      if (link) {
+        if (dirty && !window.confirm(LEAVE_WARNING)) e.preventDefault();
+        return;
+      }
+
+      const item = e.target.closest('[data-plan-item]');
+      if (!item) return;
+
+      if (e.target.closest('[data-plan-remove]')) {
+        item.remove();
+        markDirty();
+        refresh();
+        return;
+      }
+
       const up = e.target.closest('[data-order-up]');
       const down = e.target.closest('[data-order-down]');
       if (up || down) {
-        const item = (up ?? down).closest('[data-plan-item]');
-        const selected = checkedItems();
-        const i = selected.indexOf(item);
-        const swap = selected[i + (up ? -1 : 1)];
+        const items = rows();
+        const swap = items[items.indexOf(item) + (up ? -1 : 1)];
         if (swap) {
           if (up) swap.before(item);
           else swap.after(item);
-          renumber();
+          markDirty();
+          refresh();
           item.scrollIntoView({ block: 'nearest' });
         }
         return;
@@ -324,20 +523,29 @@
       const dec = e.target.closest('[data-sets-dec]');
       const inc = e.target.closest('[data-sets-inc]');
       if (!dec && !inc) return;
-      const input = (dec ?? inc).closest('[data-plan-sets]').querySelector('[data-sets-input]');
+      const input = item.querySelector('[data-sets-input]');
       input.value = String(clamp(parseInt(input.value, 10) + (inc ? 1 : -1), 1, 20));
+      markDirty();
     });
 
     form.addEventListener('submit', (e) => {
-      if ($$('[data-plan-check]:checked').length === 0) {
+      if (rows().length === 0) {
         e.preventDefault();
         window.alert('Wähle mindestens eine Übung für den Plan aus.');
+        return;
       }
+      dirty = false;
     });
 
-    renumber();
-    refreshCount();
+    // "Training starten" liegt außerhalb des Formulars – ungespeicherte
+    // Änderungen wären sonst still weg.
+    $('[data-plan-start]')?.addEventListener('click', (e) => {
+      if (dirty && !window.confirm(LEAVE_WARNING)) e.preventDefault();
+    });
+
+    refresh();
   }
+
 
   // =========================================================================
   // Aktives Workout (/workout/active)
@@ -685,77 +893,20 @@
     }
 
     // --------------------------------------------------------------------
-    // Übungs-Picker
+    // Übungs-Picker – gemeinsames Sheet mit dem Plan-Editor
     // --------------------------------------------------------------------
     function openPicker() {
-      const overlay = document.createElement('div');
-      overlay.className = 'fixed inset-0 z-50 flex items-end bg-black/60 backdrop-blur-sm';
-      overlay.innerHTML = `
-        <div class="mx-auto flex max-h-[85dvh] w-full max-w-lg flex-col rounded-t-3xl border-t border-border bg-surface pb-6 safe-bottom">
-          <div class="mx-auto mt-3 mb-3 h-1 w-10 rounded-full bg-border"></div>
-          <div class="flex items-center gap-2 px-4 pb-3">
-            <h2 class="flex-1 text-lg font-bold">Übung anfügen</h2>
-            <button type="button" class="btn-ghost !min-w-11 !px-0" data-picker-close aria-label="Schließen">
-              ${icon('x', 22)}
-            </button>
-          </div>
-          <div class="relative px-4 pb-3">
-            <span class="pointer-events-none absolute left-7 top-1/2 -translate-y-1/2 text-muted">${icon('search', 18)}</span>
-            <input class="input pl-10" type="search" placeholder="Übung suchen" data-picker-search autocomplete="off">
-          </div>
-          <ul class="flex-1 overflow-y-auto px-4" data-picker-list>
-            ${payload.library
-              .map(
-                (ex) => `
-              <li data-picker-item data-search="${esc((ex.name + ' ' + ex.targetMuscle + ' ' + ex.category + ' ' + (MOVEMENT_LABELS[ex.movement] ?? '') + ' ' + (EQUIPMENT_LABELS[ex.equipment] ?? '')).toLowerCase())}">
-                <button type="button" class="flex w-full touch items-center gap-3 border-b border-border/60 py-3 text-left" data-picker-pick="${esc(ex.id)}">
-                  ${exerciseThumb(ex.image, ex.category, 'size-10 rounded-lg')}
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate font-semibold">${esc(ex.name)}</span>
-                    <span class="block truncate text-xs text-muted">${esc(ex.targetMuscle || ex.category)}</span>
-                    ${tagBadges(ex.movement, ex.equipment) ? `<span class="mt-1 flex flex-wrap gap-1">${tagBadges(ex.movement, ex.equipment)}</span>` : ''}
-                  </span>
-                  <span class="shrink-0 rounded-md bg-surface-2 px-2 py-0.5 text-[11px] font-semibold text-muted">${esc(ex.category)}</span>
-                </button>
-              </li>`,
-              )
-              .join('')}
-          </ul>
-          <div class="px-4 pt-3">
-            <a href="/exercises" class="btn-secondary w-full">${icon('plus', 18)} Neue Übung anlegen</a>
-          </div>
-        </div>`;
-
-      document.body.appendChild(overlay);
-      document.body.style.overflow = 'hidden';
-
-      const close = () => {
-        overlay.remove();
-        document.body.style.overflow = '';
-      };
-
-      $('[data-picker-search]', overlay).addEventListener('input', (e) => {
-        const q = e.target.value.trim().toLowerCase();
-        for (const li of $$('[data-picker-item]', overlay)) {
-          li.classList.toggle('hidden', Boolean(q) && !li.dataset.search.includes(q));
-        }
-      });
-
-      overlay.addEventListener('click', (e) => {
-        if (e.target === overlay || e.target.closest('[data-picker-close]')) return close();
-        const pick = e.target.closest('[data-picker-pick]');
-        if (!pick) return;
-        const ex = payload.library.find((x) => x.id === pick.dataset.pickerPick);
-        if (ex) {
+      openExercisePicker({
+        title: 'Übung anfügen',
+        library: payload.library,
+        newExerciseHref: '/exercises',
+        onPick: (ex) => {
           state.entries.push(makeEntry(ex, 3));
           state.current = state.entries.length - 1;
           save();
           render();
-        }
-        close();
+        },
       });
-
-      setTimeout(() => $('[data-picker-search]', overlay)?.focus(), 60);
     }
 
     // --------------------------------------------------------------------
