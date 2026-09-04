@@ -142,6 +142,23 @@ export const recaps = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// ai_requests – Zähler für das Gemini-Ratelimit (Free Tier: 15 Anfragen/Minute)
+//
+// Eine Zeile je tatsächlich abgesetztem Gemini-HTTP-Call (Retries zählen mit!).
+// Der Zähler liegt in D1 und nicht im Worker-Speicher, weil jeder Isolate
+// seinen eigenen Speicher hat – nur die Datenbank sieht alle Requests.
+// ---------------------------------------------------------------------------
+export const aiRequests = sqliteTable(
+  'ai_requests',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    /** Zeitpunkt des Calls in ms seit Epoch (Date.now()) */
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [index('idx_ai_requests_created_at').on(t.createdAt)],
+);
+
+// ---------------------------------------------------------------------------
 // Relations (für die Drizzle Query-API)
 // ---------------------------------------------------------------------------
 export const workoutPlansRelations = relations(workoutPlans, ({ many }) => ({

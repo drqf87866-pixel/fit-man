@@ -1,4 +1,5 @@
 import type { Bindings } from '../types';
+import { aiRpmLimit, reserveAiSlot } from './ai-quota';
 
 /**
  * Schlanker Gemini-Client für schema-gebundenen JSON-Output.
@@ -14,29 +15,41 @@ import type { Bindings } from '../types';
  *   Prompt-Größe. Bei Modellwechsel also immer die Latenz mitmessen.
  * - Es wird kein `temperature` gesendet: Flash-Lite unterstützt keine eigenen
  *   Sampling-Werte, und für JSON im `responseSchema` ist es ohnehin unnötig.
+ * - Vor jedem HTTP-Call wird ein Slot im globalen Minutenbudget reserviert
+ *   (siehe lib/ai-quota.ts). Der Gemini-Free-Tier erlaubt 15 Anfragen pro
+ *   Minute; wir bleiben per Default bei 14. Retries zählen mit.
  * - Flüchtige Fehler (Timeout, 429, 5xx, leere Antwort) werden automatisch
  *   wiederholt. Das Budget ist bewusst gedeckelt (Default 3 × 20 s + Backoff
  *   ≈ 62 s), damit die Antwort noch vor Cloudflares Verbindungslimit steht
  *   und der Nutzer nicht minutenlang auf ein leeres Formular wartet.
  */
 
-export type GeminiErrorCode = 'missing-key' | 'timeout' | 'http' | 'empty' | 'parse';
+export type GeminiErrorCode =
+  | 'missing-key'
+  | 'rate-limit'
+  | 'timeout'
+  | 'http'
+  | 'empty'
+  | 'parse';
 
 export class GeminiError extends Error {
   code: GeminiErrorCode;
   status?: number;
   detail?: string;
+  /** Nur bei code === 'rate-limit': Sekunden bis wieder ein Slot frei ist. */
+  retryAfterSec?: number;
 
   constructor(
     code: GeminiErrorCode,
     message: string,
-    opts?: { status?: number; detail?: string },
+    opts?: { status?: number; detail?: string; retryAfterSec?: number },
   ) {
     super(message);
     this.name = 'GeminiError';
     this.code = code;
     if (opts?.status !== undefined) this.status = opts.status;
     if (opts?.detail !== undefined) this.detail = opts.detail;
+    if (opts?.retryAfterSec !== undefined) this.retryAfterSec = opts.retryAfterSec;
   }
 }
 
@@ -69,7 +82,7 @@ const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 /** Führt einen schema-typisierten Gemini-Aufruf aus und parst das JSON-Antwortfeld. */
 export async function geminiJson<T>(
-  env: Pick<Bindings, 'GEMINI_API_KEY' | 'GEMINI_MODEL'>,
+  env: Pick<Bindings, 'GEMINI_API_KEY' | 'GEMINI_MODEL' | 'GEMINI_RPM' | 'DB'>,
   opts: GeminiJsonOptions,
 ): Promise<T> {
   if (!env.GEMINI_API_KEY) {
@@ -83,7 +96,23 @@ export async function geminiJson<T>(
 
   let lastError: GeminiError | null = null;
 
+  const rpmLimit = aiRpmLimit(env.GEMINI_RPM);
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Budget vor dem Call belegen. Kein Retry: das Fenster ist 60 s breit,
+    // so lange darf kein Request hängen bleiben.
+    const slot = await reserveAiSlot(env.DB, rpmLimit);
+    if (!slot.ok) {
+      console.warn(
+        `[fit-man] Gemini Minutenbudget (${rpmLimit}/min) ausgeschöpft – frei in ${slot.retryAfterSec}s`,
+      );
+      throw new GeminiError(
+        'rate-limit',
+        `Minutenbudget von ${rpmLimit} KI-Anfragen ausgeschöpft.`,
+        { retryAfterSec: slot.retryAfterSec },
+      );
+    }
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -192,6 +221,8 @@ export function geminiErrorKey(e: GeminiError): string {
   switch (e.code) {
     case 'missing-key':
       return 'key';
+    case 'rate-limit':
+      return 'rate';
     case 'timeout':
       return 'timeout';
     case 'empty':
@@ -211,6 +242,7 @@ export const GEMINI_ERROR_TEXTS: Record<string, string> = {
   empty: 'Der KI-Dienst hat keine Antwort geliefert. Bitte versuche es erneut.',
   invalid: 'Die Antwort war nicht verwertbar. Bitte versuche es erneut.',
   key: 'Der KI-Schlüssel ist nicht eingerichtet.',
+  rate: 'Das Minutenlimit für KI-Anfragen ist erreicht. Bitte kurz warten und erneut versuchen.',
   timeout: 'Der KI-Dienst hat zu lange gebraucht. Bitte erneut versuchen.',
   http: 'Der KI-Dienst ist gerade nicht erreichbar. Bitte später erneut versuchen.',
 };

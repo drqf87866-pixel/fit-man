@@ -577,7 +577,12 @@ app.get('/api/exercises/:id/alternatives', async (c) => {
   } catch (err) {
     console.error('[fit-man] alternatives fehlgeschlagen', err);
     const key = err instanceof GeminiError ? geminiErrorKey(err) : 'http';
-    return c.json({ error: key, message: GEMINI_ERROR_TEXTS[key] ?? GEMINI_ERROR_TEXTS.http }, 502);
+    // Minutenbudget erschöpft -> 429, damit der Client den Fall unterscheiden kann.
+    const status = key === 'rate' ? 429 : 502;
+    return c.json(
+      { error: key, message: GEMINI_ERROR_TEXTS[key] ?? GEMINI_ERROR_TEXTS.http },
+      status,
+    );
   }
 
   // Harte Grenze wie beim Plan-Generator: nur echte IDs, nie die Ausgangsübung,

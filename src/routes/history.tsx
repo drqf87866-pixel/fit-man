@@ -23,7 +23,7 @@ import {
   formatWeight,
 } from '../lib/format';
 import { isoWeek, parseWeekKey, weekBoundsSec, weekLabel, weekRangeLabel } from '../lib/weeks';
-import { geminiJson } from '../lib/gemini';
+import { geminiJson, GeminiError, GEMINI_ERROR_TEXTS } from '../lib/gemini';
 import { EmptyState, Layout, PageHeader } from '../components/layout';
 import { Icon, type IconName } from '../components/icons';
 import type { AppEnv } from '../types';
@@ -42,13 +42,14 @@ const Stat = ({ icon, value, label }: { icon: IconName; value: string; label: st
 // KI-Wochen-Rückblick
 // ---------------------------------------------------------------------------
 
-type RecapFlash = 'done' | 'nodata' | 'failed' | 'invalid' | null;
+type RecapFlash = 'done' | 'nodata' | 'failed' | 'invalid' | 'rate' | null;
 
 const FLASH_TEXT: Record<Exclude<RecapFlash, null>, string> = {
   done: 'Rückblick gespeichert.',
   nodata: 'Für diese Woche gibt es keine Trainingsdaten.',
   failed: 'Der KI-Rückblick konnte nicht erstellt werden. Bitte später erneut versuchen.',
   invalid: 'Ungültiger Wochen-Schlüssel.',
+  rate: GEMINI_ERROR_TEXTS.rate,
 };
 
 const FlashBanner: FC<{ kind: RecapFlash }> = ({ kind }) => {
@@ -177,7 +178,9 @@ app.get('/history', async (c) => {
   const [workouts, stats] = await Promise.all([listWorkouts(db, 1000), getStats(db)]);
   const q = c.req.query('recap') ?? '';
   const flash: RecapFlash =
-    q === 'done' || q === 'nodata' || q === 'failed' || q === 'invalid' ? q : null;
+    q === 'done' || q === 'nodata' || q === 'failed' || q === 'invalid' || q === 'rate'
+      ? q
+      : null;
 
   // Workouts (bereits neueste zuerst) nach ISO-Woche gruppieren.
   const groups: Map<string, { year: number; week: number; weekKey: string; workouts: WorkoutListRow[] }> =
@@ -356,6 +359,8 @@ app.post('/history/recap', async (c) => {
     return c.redirect(`/history?recap=done#week-${weekKey}`, 303);
   } catch (err) {
     console.error('[fit-man] Recap fehlgeschlagen', err);
+    // Minutenbudget erschöpft: eigener Hinweis, damit "später erneut" konkret wird.
+    if (err instanceof GeminiError && err.code === 'rate-limit') return fail('rate');
     return fail('failed');
   }
 });
