@@ -1,6 +1,7 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import type { DB } from '../db';
-import { exercises, planExercises, setLogs, workoutLogs } from '../db/schema';
+import { exercises, planExercises, recaps, setLogs, workoutLogs, type Recap } from '../db/schema';
+import { newId } from './format';
 
 /** Ein Satz aus einem früheren Workout – für die Spalte "Vorheriger Wert". */
 export type PreviousSet = { setNumber: number; reps: number; weightKg: number };
@@ -172,4 +173,106 @@ export async function countExerciseUsage(db: DB, exerciseId: string) {
       (SELECT COUNT(*) FROM plan_exercises WHERE exercise_id = ${exerciseId}) AS n
   `);
   return row?.n ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Wochen-Recap (Feature: KI-Rückblick je ISO-Woche)
+// ---------------------------------------------------------------------------
+
+/** Workouts innerhalb [fromSec, toSec) inkl. Satz-/Volumen-Aggregaten. */
+export function listWorkoutsRange(db: DB, fromSec: number, toSec: number) {
+  return db.all<WorkoutListRow>(sql`
+    SELECT wl.id, wl.plan_id, wl.plan_name, wl.date, wl.duration_seconds, wl.notes,
+           COUNT(DISTINCT sl.exercise_id) AS exercise_count,
+           COUNT(sl.id) AS set_count,
+           COALESCE(SUM(sl.reps * sl.weight_kg), 0) AS volume
+    FROM workout_logs wl
+    LEFT JOIN set_logs sl ON sl.workout_log_id = wl.id AND sl.completed = 1
+    WHERE wl.date >= ${fromSec} AND wl.date < ${toSec}
+    GROUP BY wl.id
+    ORDER BY wl.date DESC
+  `);
+}
+
+export type WeekExerciseAggRow = {
+  exercise_id: string;
+  name: string;
+  category: string;
+  movement: string;
+  equipment: string;
+  workout_count: number;
+  set_count: number;
+  reps: number;
+  volume: number;
+  max_kg: number;
+};
+
+/** Pro Übung aggregierte Wochenwerte – kompakte Datenbasis für den LLM-Prompt. */
+export async function getWeekExerciseAggregates(db: DB, fromSec: number, toSec: number) {
+  return db.all<WeekExerciseAggRow>(sql`
+    SELECT e.id AS exercise_id, e.name, e.category, e.movement, e.equipment,
+           COUNT(DISTINCT wl.id)  AS workout_count,
+           COUNT(sl.id)           AS set_count,
+           COALESCE(SUM(sl.reps), 0)                AS reps,
+           COALESCE(SUM(sl.reps * sl.weight_kg), 0) AS volume,
+           COALESCE(MAX(sl.weight_kg), 0)           AS max_kg
+    FROM set_logs sl
+    JOIN workout_logs wl ON wl.id = sl.workout_log_id
+    JOIN exercises e     ON e.id = sl.exercise_id
+    WHERE sl.completed = 1
+      AND wl.date >= ${fromSec} AND wl.date < ${toSec}
+    GROUP BY e.id
+    ORDER BY volume DESC
+    LIMIT 40
+  `);
+}
+
+/** Gespeicherte Recaps für die übergebenen Wochenschlüssel. */
+export async function listRecaps(db: DB, weekKeys: string[]): Promise<Recap[]> {
+  if (weekKeys.length === 0) return [];
+  return db.select().from(recaps).where(inArray(recaps.weekKey, weekKeys));
+}
+
+/**
+ * Wie listRecaps, aber robust gegen eine noch nicht migrierte Tabelle:
+ * schlägt das Lesen fehl (Migration fehlt), wird "kein Recap" zurückgegeben,
+ * statt GET /history mit einem 500 abzuschießen.
+ */
+export async function listRecapsSafe(db: DB, weekKeys: string[]): Promise<Recap[]> {
+  try {
+    return await listRecaps(db, weekKeys);
+  } catch (err) {
+    console.error('[fit-man] recaps lesen fehlgeschlagen', err);
+    return [];
+  }
+}
+
+export type NewRecapData = {
+  weekKey: string;
+  year: number;
+  week: number;
+  headline: string;
+  summary: string;
+  highlightsJson: string;
+  tip: string | null;
+};
+
+/** Insert oder Update je Woche (week_key ist der eindeutige Zielschlüssel). */
+export async function upsertRecap(db: DB, r: NewRecapData): Promise<void> {
+  const now = new Date();
+  await db
+    .insert(recaps)
+    .values({ id: newId('rec'), ...r, createdAt: now, updatedAt: now })
+    .onConflictDoUpdate({
+      target: recaps.weekKey,
+      set: {
+        year: r.year,
+        week: r.week,
+        headline: r.headline,
+        summary: r.summary,
+        highlightsJson: r.highlightsJson,
+        tip: r.tip,
+        updatedAt: now,
+      },
+    });
 }

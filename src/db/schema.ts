@@ -1,5 +1,5 @@
 import { sql, relations } from 'drizzle-orm';
-import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /**
  * Alle IDs sind TEXT (UUID bzw. sprechender Slug bei Seed-Daten).
@@ -106,6 +106,35 @@ export const setLogs = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// recaps – gespeicherter KI-Wochen-Rückblick je ISO-Woche
+// ---------------------------------------------------------------------------
+export const recaps = sqliteTable(
+  'recaps',
+  {
+    id: text('id').primaryKey(),
+    /** Schlüssel "2026-35" (ISO-Jahr-KW) – eindeutig je Woche */
+    weekKey: text('week_key').notNull(),
+    year: integer('year').notNull(),
+    week: integer('week').notNull(),
+    /** Einprägsame deutsche Schlagzeile (von Gemini) */
+    headline: text('headline').notNull().default(''),
+    /** Fließtext-Zusammenfassung (von Gemini) */
+    summary: text('summary').notNull().default(''),
+    /** JSON-Array von Strings, z. B. '["…","…"]' */
+    highlightsJson: text('highlights_json').notNull().default('[]'),
+    /** Optionaler 1-Satz-Tipp für die nächste Woche; NULL = keiner */
+    tip: text('tip'),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => [uniqueIndex('idx_recaps_week_key').on(t.weekKey)],
+);
+
+// ---------------------------------------------------------------------------
 // Relations (für die Drizzle Query-API)
 // ---------------------------------------------------------------------------
 export const workoutPlansRelations = relations(workoutPlans, ({ many }) => ({
@@ -140,3 +169,5 @@ export type WorkoutPlan = typeof workoutPlans.$inferSelect;
 export type PlanExercise = typeof planExercises.$inferSelect;
 export type WorkoutLog = typeof workoutLogs.$inferSelect;
 export type SetLog = typeof setLogs.$inferSelect;
+export type Recap = typeof recaps.$inferSelect;
+export type NewRecap = typeof recaps.$inferInsert;

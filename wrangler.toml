@@ -16,5 +16,8 @@ database_name = "fit-man-db"
 database_id = "1b6bc6d6-117f-4e18-843c-87dcd1d5c68c"
 migrations_dir = "drizzle"
 
+[vars]
+GEMINI_MODEL = "gemini-3.1-flash-lite"
+
 [observability]
 enabled = true

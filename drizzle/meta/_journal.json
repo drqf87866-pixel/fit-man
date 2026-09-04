@@ -15,6 +15,13 @@
       "when": 1788523389744,
       "tag": "0001_add_movement_equipment",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788528018295,
+      "tag": "0002_add_recaps",
+      "breakpoints": true
     }
   ]
 }
