@@ -25,13 +25,13 @@ INSERT OR IGNORE INTO exercises (id, name, category, target_muscle, is_custom, m
   ('ex_hyperextension',      'Rückenstrecker (Hyperext.)', 'Rücken',   'Erector spinae',          0, 'pull', 'maschine'),
 
   -- Beine
-  ('ex_kniebeugen',          'Kniebeugen (Langhantel)',    'Beine',    'Quadrizeps, Glutes',      0, '', 'freihantel'),
-  ('ex_beinpresse',          'Beinpresse',                 'Beine',    'Quadrizeps',              0, '', 'maschine'),
-  ('ex_ausfallschritte',     'Ausfallschritte',            'Beine',    'Quadrizeps, Glutes',      0, '', 'koerpergewicht'),
-  ('ex_beinstrecker',        'Beinstrecker',               'Beine',    'Quadrizeps',              0, '', 'maschine'),
-  ('ex_beinbeuger',          'Beinbeuger',                 'Beine',    'Hamstrings',              0, '', 'maschine'),
-  ('ex_wadenheben',          'Wadenheben stehend',         'Beine',    'Gastrocnemius',           0, '', 'freihantel'),
-  ('ex_rumaenisches_kh',     'Rumänisches Kreuzheben',     'Beine',    'Hamstrings, Glutes',      0, '', 'freihantel'),
+  ('ex_kniebeugen',          'Kniebeugen (Langhantel)',    'Beine',    'Quadrizeps, Glutes',      0, 'push', 'freihantel'),
+  ('ex_beinpresse',          'Beinpresse',                 'Beine',    'Quadrizeps',              0, 'push', 'maschine'),
+  ('ex_ausfallschritte',     'Ausfallschritte',            'Beine',    'Quadrizeps, Glutes',      0, 'push', 'koerpergewicht'),
+  ('ex_beinstrecker',        'Beinstrecker',               'Beine',    'Quadrizeps',              0, 'push', 'maschine'),
+  ('ex_beinbeuger',          'Beinbeuger',                 'Beine',    'Hamstrings',              0, 'pull', 'maschine'),
+  ('ex_wadenheben',          'Wadenheben stehend',         'Beine',    'Gastrocnemius',           0, 'push', 'freihantel'),
+  ('ex_rumaenisches_kh',     'Rumänisches Kreuzheben',     'Beine',    'Hamstrings, Glutes',      0, 'pull', 'freihantel'),
 
   -- Schultern
   ('ex_schulterdruecken',    'Schulterdrücken (Langh.)',   'Schultern','Deltoideus anterior',     0, 'push', 'freihantel'),
@@ -46,14 +46,14 @@ INSERT OR IGNORE INTO exercises (id, name, category, target_muscle, is_custom, m
   ('ex_dips',                'Dips',                       'Arme',     'Trizeps, Brust',          0, 'push', 'koerpergewicht'),
 
   -- Rumpf
-  ('ex_plank',               'Plank (Unterarmstütz)',      'Rumpf',    'Rumpfstabilisation',      0, '', 'koerpergewicht'),
-  ('ex_crunches',            'Crunches',                   'Rumpf',    'Rectus abdominis',        0, '', 'koerpergewicht'),
-  ('ex_beinheben',           'Beinheben hängend',          'Rumpf',    'Unterer Bauch',           0, '', 'koerpergewicht'),
-  ('ex_russian_twists',      'Russian Twists',             'Rumpf',    'Obliquus',                0, '', 'koerpergewicht'),
+  ('ex_plank',               'Plank (Unterarmstütz)',      'Rumpf',    'Rumpfstabilisation',      0, 'core', 'koerpergewicht'),
+  ('ex_crunches',            'Crunches',                   'Rumpf',    'Rectus abdominis',        0, 'core', 'koerpergewicht'),
+  ('ex_beinheben',           'Beinheben hängend',          'Rumpf',    'Unterer Bauch',           0, 'pull', 'koerpergewicht'),
+  ('ex_russian_twists',      'Russian Twists',             'Rumpf',    'Obliquus',                0, 'core', 'koerpergewicht'),
 
   -- Cardio
-  ('ex_rudergeraet',         'Rudergerät',                 'Cardio',   'Ganzkörper',              0, '', 'maschine'),
-  ('ex_laufband',            'Laufband',                   'Cardio',   'Ausdauer',                0, '', 'maschine');
+  ('ex_rudergeraet',         'Rudergerät',                 'Cardio',   'Ganzkörper',              0, 'pull', 'maschine'),
+  ('ex_laufband',            'Laufband',                   'Cardio',   'Ausdauer',                0, 'cardio', 'maschine');
 
 -- ---------------------------------------------------------------------------
 -- Nachträgliche Tags für bereits existierende Zeilen (idempotenter Update)
@@ -70,13 +70,13 @@ SET movement = CASE id
     WHEN 'ex_kreuzheben' THEN 'pull'
     WHEN 'ex_kabelrudern' THEN 'pull'
     WHEN 'ex_hyperextension' THEN 'pull'
-    WHEN 'ex_kniebeugen' THEN ''
-    WHEN 'ex_beinpresse' THEN ''
-    WHEN 'ex_ausfallschritte' THEN ''
-    WHEN 'ex_beinstrecker' THEN ''
-    WHEN 'ex_beinbeuger' THEN ''
-    WHEN 'ex_wadenheben' THEN ''
-    WHEN 'ex_rumaenisches_kh' THEN ''
+    WHEN 'ex_kniebeugen' THEN 'push'
+    WHEN 'ex_beinpresse' THEN 'push'
+    WHEN 'ex_ausfallschritte' THEN 'push'
+    WHEN 'ex_beinstrecker' THEN 'push'
+    WHEN 'ex_beinbeuger' THEN 'pull'
+    WHEN 'ex_wadenheben' THEN 'push'
+    WHEN 'ex_rumaenisches_kh' THEN 'pull'
     WHEN 'ex_schulterdruecken' THEN 'push'
     WHEN 'ex_seitheben' THEN 'push'
     WHEN 'ex_face_pulls' THEN 'pull'
@@ -85,12 +85,12 @@ SET movement = CASE id
     WHEN 'ex_hammer_curls' THEN 'pull'
     WHEN 'ex_trizepsdruecken' THEN 'push'
     WHEN 'ex_dips' THEN 'push'
-    WHEN 'ex_plank' THEN ''
-    WHEN 'ex_crunches' THEN ''
-    WHEN 'ex_beinheben' THEN ''
-    WHEN 'ex_russian_twists' THEN ''
-    WHEN 'ex_rudergeraet' THEN ''
-    WHEN 'ex_laufband' THEN ''
+    WHEN 'ex_plank' THEN 'core'
+    WHEN 'ex_crunches' THEN 'core'
+    WHEN 'ex_beinheben' THEN 'pull'
+    WHEN 'ex_russian_twists' THEN 'core'
+    WHEN 'ex_rudergeraet' THEN 'pull'
+    WHEN 'ex_laufband' THEN 'cardio'
 END,
     equipment = CASE id
     WHEN 'ex_bankdruecken' THEN 'freihantel'

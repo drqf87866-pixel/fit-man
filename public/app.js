@@ -77,7 +77,8 @@
     search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.34-4.34"/>',
   };
 
-  const MOVEMENT_LABELS = { push: 'Push', pull: 'Pull' };
+  // Muss zu src/lib/tags.ts passen.
+  const MOVEMENT_LABELS = { push: 'Push', pull: 'Pull', core: 'Core', cardio: 'Ausdauer' };
   const EQUIPMENT_LABELS = { freihantel: 'Freihantel', maschine: 'Maschine', koerpergewicht: 'Körpergewicht' };
 
   const tagBadges = (movement, equipment) => {

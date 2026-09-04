@@ -20,7 +20,7 @@ export const exercises = sqliteTable(
     category: text('category').notNull(),
     /** Konkreter Zielmuskel, z. B. "Pectoralis major" */
     targetMuscle: text('target_muscle').notNull().default(''),
-    /** Push/Pull-Tag für Filter und Badges */
+    /** Bewegungsmuster (push/pull/core/cardio) für Filter und Badges, siehe lib/tags.ts */
     movement: text('movement').notNull().default(''),
     /** Freihantel/Maschine/Körpergewicht-Tag */
     equipment: text('equipment').notNull().default(''),

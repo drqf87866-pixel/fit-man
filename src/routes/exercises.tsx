@@ -7,7 +7,12 @@ import { newId } from '../lib/format';
 import { CategoryBadge, Layout, PageHeader } from '../components/layout';
 import { TagBadges } from '../components/tags';
 import { Icon } from '../components/icons';
-import { MOVEMENT_LABELS, EQUIPMENT_LABELS } from '../lib/tags';
+import {
+  MOVEMENT_LABELS,
+  EQUIPMENT_LABELS,
+  MOVEMENT_VALUES,
+  EQUIPMENT_VALUES,
+} from '../lib/tags';
 import type { AppEnv } from '../types';
 
 const app = new Hono<AppEnv>();
@@ -57,12 +62,17 @@ app.get('/exercises', async (c) => {
             </button>
           ))}
           <span class="mx-1 w-px shrink-0 self-stretch bg-border" aria-hidden="true"></span>
-          <button type="button" class="chip" data-ex-filter="push">Push</button>
-          <button type="button" class="chip" data-ex-filter="pull">Pull</button>
+          {MOVEMENT_VALUES.map((value) => (
+            <button type="button" class="chip" data-ex-filter={value}>
+              {MOVEMENT_LABELS[value]}
+            </button>
+          ))}
           <span class="mx-1 w-px shrink-0 self-stretch bg-border" aria-hidden="true"></span>
-          <button type="button" class="chip" data-ex-filter="freihantel">Freihantel</button>
-          <button type="button" class="chip" data-ex-filter="maschine">Maschine</button>
-          <button type="button" class="chip" data-ex-filter="koerpergewicht">Körpergewicht</button>
+          {EQUIPMENT_VALUES.map((value) => (
+            <button type="button" class="chip" data-ex-filter={value}>
+              {EQUIPMENT_LABELS[value]}
+            </button>
+          ))}
           {customCount > 0 ? (
             <button type="button" class="chip" data-ex-filter="__custom">
               <Icon name="pencil" size={14} />
@@ -169,8 +179,9 @@ app.get('/exercises', async (c) => {
               </label>
               <select class="input" id="ex-movement" name="movement">
                 <option value="">Keins</option>
-                <option value="push">Push (Drücken)</option>
-                <option value="pull">Pull (Ziehen)</option>
+                {MOVEMENT_VALUES.map((value) => (
+                  <option value={value}>{MOVEMENT_LABELS[value]}</option>
+                ))}
               </select>
             </div>
 
@@ -179,9 +190,9 @@ app.get('/exercises', async (c) => {
                 Equipment
               </label>
               <select class="input" id="ex-equipment" name="equipment" required>
-                <option value="freihantel">Freihantel</option>
-                <option value="maschine">Maschine</option>
-                <option value="koerpergewicht">Körpergewicht</option>
+                {EQUIPMENT_VALUES.map((value) => (
+                  <option value={value}>{EQUIPMENT_LABELS[value]}</option>
+                ))}
               </select>
             </div>
 
@@ -221,10 +232,8 @@ app.post('/exercises', async (c) => {
   const movementRaw = String(form.get('movement') ?? '').trim();
   const equipmentRaw = String(form.get('equipment') ?? '').trim();
 
-  const movement = movementRaw === 'push' || movementRaw === 'pull' ? movementRaw : '';
-  const equipment = ['freihantel', 'maschine', 'koerpergewicht'].includes(equipmentRaw)
-    ? equipmentRaw
-    : '';
+  const movement = MOVEMENT_VALUES.includes(movementRaw) ? movementRaw : '';
+  const equipment = EQUIPMENT_VALUES.includes(equipmentRaw) ? equipmentRaw : '';
 
   if (name) {
     await db
