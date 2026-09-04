@@ -216,23 +216,17 @@ export const PlanEditor = ({
       </template>
 
       {aiHint ? (
-        <div class="flex flex-col gap-2">
-          <button type="submit" class="btn-primary w-full shadow-xl">
-            <Icon name="save" size={20} />
-            {submitLabel}
-          </button>
-          <a href="/plans/generate" class="btn-ghost w-full text-center">
-            Neue Idee (erneut generieren)
-          </a>
-        </div>
-      ) : (
-        <div class="sticky bottom-24 z-20">
-          <button type="submit" class="btn-primary w-full shadow-xl">
-            <Icon name="save" size={20} />
-            {submitLabel}
-          </button>
-        </div>
-      )}
+        <a href="/plans/generate" class="btn-ghost w-full text-center">
+          Neue Idee (erneut generieren)
+        </a>
+      ) : null}
+
+      <div class="sticky bottom-24 z-20">
+        <button type="submit" class="btn-primary w-full shadow-xl">
+          <Icon name="save" size={20} />
+          {submitLabel}
+        </button>
+      </div>
     </form>
   );
 };
