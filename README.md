@@ -183,26 +183,42 @@ npx drizzle-kit check --dialect=sqlite --out=./drizzle
 
 ## Seed-Daten
 
-`seed.sql` legt 31 Standardübungen an (Brust, Rücken, Beine, Schultern, Arme,
-Rumpf, Cardio) — Bankdrücken, Kniebeugen, Kreuzheben, Klimmzüge usw. Das Skript
-nutzt `INSERT OR IGNORE` mit festen IDs und ist damit beliebig oft ausführbar.
-Eigene Übungen aus der App landen mit `is_custom = 1` in derselben Tabelle.
+`seed.sql` legt 56 Standardübungen an, verteilt auf Brust (7), Rücken (10),
+Beine (12), Schultern (7), Arme (8), Rumpf (7) und Cardio (5) — von Bankdrücken
+und Kniebeugen bis Hip Thrust, Ab Wheel und Crosstrainer. Eigene Übungen aus der
+App landen mit `is_custom = 1` in derselben Tabelle.
 
-> [!IMPORTANT]
-> `INSERT OR IGNORE` überspringt Zeilen, deren ID schon existiert — **inklusive
-> geänderter Spaltenwerte**. Wer einer bestehenden Übung ein neues Feld verpassen
-> will (wie damals `movement`/`equipment`), erreicht mit dem `INSERT` allein
-> nichts: bei einer bereits geseedeten Datenbank passiert schlicht gar nichts.
->
-> Deshalb steht am Ende von `seed.sql` ein `UPDATE`-Block, der die Tags per
-> `CASE id` auch auf vorhandene Zeilen schreibt. **Neue Spaltenwerte immer dort
-> ebenfalls nachtragen**, sonst sehen nur frische Datenbanken die Änderung.
+Das Skript ist ein **UPSERT** und damit beliebig oft ausführbar:
 
-Nach einer Seed-Änderung gegenprüfen, dass die Werte wirklich angekommen sind:
+```sql
+INSERT INTO exercises (...) VALUES
+  ('ex_bankdruecken', 'Bankdrücken (Langhantel)', 'Brust', ..., 'push', 'freihantel'),
+  ...
+ON CONFLICT(id) DO UPDATE SET
+  name = excluded.name, category = excluded.category, ...
+```
+
+Neue Übungen werden angelegt, bereits vorhandene auf den Stand der Datei
+gebracht. **Jede Übung steht damit an genau einer Stelle** — geänderte Werte
+kommen automatisch auch in bereits geseedeten Datenbanken an.
+
+> [!NOTE]
+> Vorher nutzte die Datei `INSERT OR IGNORE` plus einen nachgelagerten
+> `UPDATE ... CASE id`-Block. Das war fehleranfällig: `INSERT OR IGNORE`
+> überspringt bestehende Zeilen **inklusive geänderter Spaltenwerte**, sodass ein
+> neues Feld nur in frischen Datenbanken ankam, solange man den UPDATE-Block
+> nicht parallel pflegte. Genau daran hingen die zunächst unsichtbaren
+> `movement`/`equipment`-Tags.
+
+`is_custom` wird vom UPSERT bewusst nicht überschrieben. Kollidieren kann dabei
+ohnehin nichts: eigene Übungen bekommen IDs der Form `ex_<uuid>`, die Seed-Daten
+sprechende Slugs wie `ex_bankdruecken`.
+
+Nach einer Seed-Änderung gegenprüfen, dass die Werte angekommen sind:
 
 ```bash
-npx wrangler d1 execute fit-man-db --remote --json --command "SELECT count(*) total, sum(movement <> '') mit_movement, sum(equipment <> '') mit_equipment FROM exercises;"
-# -> { "total": 31, "mit_movement": 18, "mit_equipment": 31 }
+npx wrangler d1 execute fit-man-db --remote --json --command "SELECT count(*) total, sum(is_custom) eigene, count(DISTINCT movement) bewegungen FROM exercises;"
+# -> { "total": 56, "eigene": 0, "bewegungen": 4 }
 ```
 
 Das `--command` muss einzeilig bleiben; mehrzeilige Statements kommen bei D1 als
