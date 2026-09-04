@@ -65,6 +65,24 @@
     },
   };
 
+  // Eingeloggter Nutzer – kommt aus dem Meta-Tag, den das SSR-Layout pro
+  // Seite rendert. Das Asset selbst bleibt nutzerneutral (Edge-Cache!).
+  const USER_ID = document.querySelector('meta[name="fitman-user"]')?.content || '';
+
+  /**
+   * fetch + 401-Behandlung: Läuft die Session aus (Cookie abgelaufen), statt
+   * still zu versagen zurück zum Login. Cookies gehen same-origin automatisch
+   * mit; der Wurf wird von den try/catch-Blöcken der Aufrufer geschluckt.
+   */
+  const fetchOrLogin = async (url, opts) => {
+    const res = await fetch(url, opts);
+    if (res.status === 401) {
+      window.location.href = '/login';
+      throw new Error('Sitzung abgelaufen');
+    }
+    return res;
+  };
+
   const ICON = {
     check: '<path d="M20 6 9 17l-5-5"/>',
     x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
@@ -236,7 +254,7 @@
   /** Bibliothek einmalig laden (der Plan-Editor bekommt sie nicht im HTML mit). */
   async function loadLibrary() {
     if (!libraryCache) {
-      const res = await fetch('/api/exercises', { headers: { accept: 'application/json' } });
+      const res = await fetchOrLogin('/api/exercises', { headers: { accept: 'application/json' } });
       if (!res.ok) throw new Error('library');
       libraryCache = await res.json();
     }
@@ -550,8 +568,25 @@
   // =========================================================================
   // Aktives Workout (/workout/active)
   // =========================================================================
-  const STATE_KEY = 'fitman.activeWorkout';
-  const REST_KEY = 'fitman.restSeconds';
+  // Keys je Nutzer namespaced: teilen sich zwei Konten ein Gerät, erbt das
+  // aktive Workout nicht vom Vornutzer. Einmalige Migration des alten
+  // unpräfixten Keys, damit eine unterbrochene Gym-Session erhalten bleibt.
+  const STATE_KEY = USER_ID ? `fitman.activeWorkout.${USER_ID}` : 'fitman.activeWorkout';
+  const REST_KEY = USER_ID ? `fitman.restSeconds.${USER_ID}` : 'fitman.restSeconds';
+  {
+    try {
+      if (USER_ID && !localStorage.getItem(STATE_KEY) && localStorage.getItem('fitman.activeWorkout')) {
+        localStorage.setItem(STATE_KEY, localStorage.getItem('fitman.activeWorkout'));
+        localStorage.removeItem('fitman.activeWorkout');
+      }
+      if (USER_ID && !localStorage.getItem(REST_KEY) && localStorage.getItem('fitman.restSeconds')) {
+        localStorage.setItem(REST_KEY, localStorage.getItem('fitman.restSeconds'));
+        localStorage.removeItem('fitman.restSeconds');
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 
   function initWorkout() {
     const root = $('#workout-root');
@@ -991,7 +1026,7 @@
           </button>
         </div>`;
 
-      fetch(`/api/exercises/${encodeURIComponent(source.exerciseId)}/alternatives`)
+      fetchOrLogin(`/api/exercises/${encodeURIComponent(source.exerciseId)}/alternatives`)
         .then(async (res) => {
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.message || 'Vorschläge nicht verfügbar.');
@@ -1106,7 +1141,7 @@
         btn.disabled = true;
         btn.innerHTML = 'Speichern …';
         try {
-          const res = await fetch('/api/workouts', {
+          const res = await fetchOrLogin('/api/workouts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(serialize()),
@@ -1290,6 +1325,20 @@
     initExerciseLibrary();
     initPlanForm();
     initWorkout();
+
+    // Abmelden: Arbeitszustand des aktuellen Nutzers gleich mit weg räumen,
+    // bevor der Redirect zur Login-Seite geht.
+    $$('form[action="/logout"]').forEach((form) => {
+      form.addEventListener('submit', () => {
+        if (!USER_ID) return;
+        try {
+          localStorage.removeItem(`fitman.activeWorkout.${USER_ID}`);
+          localStorage.removeItem(`fitman.restSeconds.${USER_ID}`);
+        } catch {
+          /* ignore */
+        }
+      });
+    });
   };
 
   if (document.readyState === 'loading') {

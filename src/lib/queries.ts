@@ -1,7 +1,13 @@
-import { eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { DB } from '../db';
 import { exercises, planExercises, recaps, setLogs, workoutLogs, type Recap } from '../db/schema';
 import { newId } from './format';
+
+/**
+ * Konvention: Jede nutzerspezifische Query nimmt userId direkt nach db.
+ * Die Werte kommen aus der Session (middleware/auth.ts) – Queries dürfen
+ * niemals "offen" (ohne User-Filter) bleiben, sonst sehen Nutzer fremde Daten.
+ */
 
 /** Ein Satz aus einem früheren Workout – für die Spalte "Vorheriger Wert". */
 export type PreviousSet = { setNumber: number; reps: number; weightKg: number };
@@ -10,8 +16,10 @@ export type PreviousMap = Record<string, { date: number; sets: PreviousSet[] }>;
 /**
  * Letzte absolvierte Sätze je Übung (Quick History View).
  * Nimmt pro Übung das jeweils jüngste Workout, in dem sie abgehakt wurde.
+ * Der User-Filter muss auch in die korrelierte MAX-Subquery – sonst gewinnt
+ * das jüngste FREMDE Workout und "Vorheriger Wert" leakt über die Nutzer.
  */
-export async function getPreviousSets(db: DB): Promise<PreviousMap> {
+export async function getPreviousSets(db: DB, userId: string): Promise<PreviousMap> {
   const rows = await db.all<{
     exercise_id: string;
     set_number: number;
@@ -23,11 +31,13 @@ export async function getPreviousSets(db: DB): Promise<PreviousMap> {
     FROM set_logs sl
     JOIN workout_logs wl ON wl.id = sl.workout_log_id
     WHERE sl.completed = 1
+      AND wl.user_id = ${userId}
       AND wl.date = (
         SELECT MAX(wl2.date)
         FROM set_logs sl2
         JOIN workout_logs wl2 ON wl2.id = sl2.workout_log_id
         WHERE sl2.exercise_id = sl.exercise_id AND sl2.completed = 1
+          AND wl2.user_id = ${userId}
       )
     ORDER BY sl.exercise_id, sl.set_number
   `);
@@ -50,12 +60,13 @@ export type PlanListRow = {
 };
 
 /** Pläne inkl. Übungsanzahl und letztem Trainingsdatum. */
-export function listPlans(db: DB) {
+export function listPlans(db: DB, userId: string) {
   return db.all<PlanListRow>(sql`
     SELECT p.id, p.name, p.description, p.created_at,
            (SELECT COUNT(*) FROM plan_exercises pe WHERE pe.plan_id = p.id) AS exercise_count,
            (SELECT MAX(wl.date) FROM workout_logs wl WHERE wl.plan_id = p.id) AS last_done
     FROM workout_plans p
+    WHERE p.user_id = ${userId}
     ORDER BY p.created_at DESC
   `);
 }
@@ -94,7 +105,7 @@ export type WorkoutListRow = {
 };
 
 /** Workout-Historie mit aggregierten Kennzahlen. */
-export function listWorkouts(db: DB, limit = 100) {
+export function listWorkouts(db: DB, userId: string, limit = 100) {
   return db.all<WorkoutListRow>(sql`
     SELECT wl.id, wl.plan_id, wl.plan_name, wl.date, wl.duration_seconds, wl.notes,
            COUNT(DISTINCT sl.exercise_id) AS exercise_count,
@@ -102,15 +113,20 @@ export function listWorkouts(db: DB, limit = 100) {
            COALESCE(SUM(sl.reps * sl.weight_kg), 0) AS volume
     FROM workout_logs wl
     LEFT JOIN set_logs sl ON sl.workout_log_id = wl.id AND sl.completed = 1
+    WHERE wl.user_id = ${userId}
     GROUP BY wl.id
     ORDER BY wl.date DESC
     LIMIT ${limit}
   `);
 }
 
-/** Ein Workout inkl. aller Sätze, gruppiert nach Übung. */
-export async function getWorkoutDetail(db: DB, id: string) {
-  const [log] = await db.select().from(workoutLogs).where(eq(workoutLogs.id, id)).limit(1);
+/** Ein Workout inkl. aller Sätze, gruppiert nach Übung – nur der eigene. */
+export async function getWorkoutDetail(db: DB, userId: string, id: string) {
+  const [log] = await db
+    .select()
+    .from(workoutLogs)
+    .where(and(eq(workoutLogs.id, id), eq(workoutLogs.userId, userId)))
+    .limit(1);
   if (!log) return null;
 
   const rows = await db
@@ -147,31 +163,45 @@ export async function getWorkoutDetail(db: DB, id: string) {
 }
 
 /** Kennzahlen für den Kopf der Verlaufsseite. */
-export async function getStats(db: DB) {
+export async function getStats(db: DB, userId: string) {
   const [row] = await db.all<{
     total: number;
     total_seconds: number;
     volume: number;
   }>(sql`
     SELECT
-      (SELECT COUNT(*) FROM workout_logs) AS total,
-      (SELECT COALESCE(SUM(duration_seconds), 0) FROM workout_logs) AS total_seconds,
-      (SELECT COALESCE(SUM(reps * weight_kg), 0) FROM set_logs WHERE completed = 1) AS volume
+      (SELECT COUNT(*) FROM workout_logs WHERE user_id = ${userId}) AS total,
+      (SELECT COALESCE(SUM(duration_seconds), 0) FROM workout_logs WHERE user_id = ${userId}) AS total_seconds,
+      (SELECT COALESCE(SUM(sl.reps * sl.weight_kg), 0)
+         FROM set_logs sl
+         JOIN workout_logs wl ON wl.id = sl.workout_log_id
+         WHERE sl.completed = 1 AND wl.user_id = ${userId}) AS volume
   `);
   return row ?? { total: 0, total_seconds: 0, volume: 0 };
 }
 
-/** Alle Übungen, gruppiert sortiert nach Kategorie und Name. */
-export function listExercises(db: DB) {
-  return db.select().from(exercises).orderBy(exercises.category, exercises.name);
+/**
+ * Alle Übungen: die globale Standard-Bibliothek (is_custom = 0, via Seed)
+ * plus die eigenen Übungen des Nutzers. Reihenfolge wie gehabt.
+ */
+export function listExercises(db: DB, userId: string) {
+  return db
+    .select()
+    .from(exercises)
+    .where(sql`is_custom = 0 OR user_id = ${userId}`)
+    .orderBy(exercises.category, exercises.name);
 }
 
 /** Wie oft wurde eine Übung bereits geloggt? Schützt vor Löschen mit Historie. */
-export async function countExerciseUsage(db: DB, exerciseId: string) {
+export async function countExerciseUsage(db: DB, userId: string, exerciseId: string) {
   const [row] = await db.all<{ n: number }>(sql`
     SELECT
-      (SELECT COUNT(*) FROM set_logs WHERE exercise_id = ${exerciseId}) +
-      (SELECT COUNT(*) FROM plan_exercises WHERE exercise_id = ${exerciseId}) AS n
+      (SELECT COUNT(*) FROM set_logs sl
+         JOIN workout_logs wl ON wl.id = sl.workout_log_id
+         WHERE sl.exercise_id = ${exerciseId} AND wl.user_id = ${userId}) +
+      (SELECT COUNT(*) FROM plan_exercises pe
+         JOIN workout_plans p ON p.id = pe.plan_id
+         WHERE pe.exercise_id = ${exerciseId} AND p.user_id = ${userId}) AS n
   `);
   return row?.n ?? 0;
 }
@@ -181,7 +211,7 @@ export async function countExerciseUsage(db: DB, exerciseId: string) {
 // ---------------------------------------------------------------------------
 
 /** Workouts innerhalb [fromSec, toSec) inkl. Satz-/Volumen-Aggregaten. */
-export function listWorkoutsRange(db: DB, fromSec: number, toSec: number) {
+export function listWorkoutsRange(db: DB, userId: string, fromSec: number, toSec: number) {
   return db.all<WorkoutListRow>(sql`
     SELECT wl.id, wl.plan_id, wl.plan_name, wl.date, wl.duration_seconds, wl.notes,
            COUNT(DISTINCT sl.exercise_id) AS exercise_count,
@@ -189,7 +219,8 @@ export function listWorkoutsRange(db: DB, fromSec: number, toSec: number) {
            COALESCE(SUM(sl.reps * sl.weight_kg), 0) AS volume
     FROM workout_logs wl
     LEFT JOIN set_logs sl ON sl.workout_log_id = wl.id AND sl.completed = 1
-    WHERE wl.date >= ${fromSec} AND wl.date < ${toSec}
+    WHERE wl.user_id = ${userId}
+      AND wl.date >= ${fromSec} AND wl.date < ${toSec}
     GROUP BY wl.id
     ORDER BY wl.date DESC
   `);
@@ -209,7 +240,12 @@ export type WeekExerciseAggRow = {
 };
 
 /** Pro Übung aggregierte Wochenwerte – kompakte Datenbasis für den LLM-Prompt. */
-export async function getWeekExerciseAggregates(db: DB, fromSec: number, toSec: number) {
+export async function getWeekExerciseAggregates(
+  db: DB,
+  userId: string,
+  fromSec: number,
+  toSec: number,
+) {
   return db.all<WeekExerciseAggRow>(sql`
     SELECT e.id AS exercise_id, e.name, e.category, e.movement, e.equipment,
            COUNT(DISTINCT wl.id)  AS workout_count,
@@ -221,6 +257,7 @@ export async function getWeekExerciseAggregates(db: DB, fromSec: number, toSec: 
     JOIN workout_logs wl ON wl.id = sl.workout_log_id
     JOIN exercises e     ON e.id = sl.exercise_id
     WHERE sl.completed = 1
+      AND wl.user_id = ${userId}
       AND wl.date >= ${fromSec} AND wl.date < ${toSec}
     GROUP BY e.id
     ORDER BY volume DESC
@@ -228,10 +265,13 @@ export async function getWeekExerciseAggregates(db: DB, fromSec: number, toSec: 
   `);
 }
 
-/** Gespeicherte Recaps für die übergebenen Wochenschlüssel. */
-export async function listRecaps(db: DB, weekKeys: string[]): Promise<Recap[]> {
+/** Gespeicherte Recaps des Nutzers für die übergebenen Wochenschlüssel. */
+export async function listRecaps(db: DB, userId: string, weekKeys: string[]): Promise<Recap[]> {
   if (weekKeys.length === 0) return [];
-  return db.select().from(recaps).where(inArray(recaps.weekKey, weekKeys));
+  return db
+    .select()
+    .from(recaps)
+    .where(and(eq(recaps.userId, userId), inArray(recaps.weekKey, weekKeys)));
 }
 
 /**
@@ -239,9 +279,9 @@ export async function listRecaps(db: DB, weekKeys: string[]): Promise<Recap[]> {
  * schlägt das Lesen fehl (Migration fehlt), wird "kein Recap" zurückgegeben,
  * statt GET /history mit einem 500 abzuschießen.
  */
-export async function listRecapsSafe(db: DB, weekKeys: string[]): Promise<Recap[]> {
+export async function listRecapsSafe(db: DB, userId: string, weekKeys: string[]): Promise<Recap[]> {
   try {
-    return await listRecaps(db, weekKeys);
+    return await listRecaps(db, userId, weekKeys);
   } catch (err) {
     console.error('[fit-man] recaps lesen fehlgeschlagen', err);
     return [];
@@ -258,14 +298,14 @@ export type NewRecapData = {
   tip: string | null;
 };
 
-/** Insert oder Update je Woche (week_key ist der eindeutige Zielschlüssel). */
-export async function upsertRecap(db: DB, r: NewRecapData): Promise<void> {
+/** Insert oder Update je Woche – eindeutiger Zielschlüssel ist (user, week). */
+export async function upsertRecap(db: DB, userId: string, r: NewRecapData): Promise<void> {
   const now = new Date();
   await db
     .insert(recaps)
-    .values({ id: newId('rec'), ...r, createdAt: now, updatedAt: now })
+    .values({ id: newId('rec'), userId, ...r, createdAt: now, updatedAt: now })
     .onConflictDoUpdate({
-      target: recaps.weekKey,
+      target: [recaps.userId, recaps.weekKey],
       set: {
         year: r.year,
         week: r.week,
@@ -299,6 +339,7 @@ export type ProgressPoint = {
  */
 export async function getExerciseProgress(
   db: DB,
+  userId: string,
   exerciseId: string,
   limit = 20,
 ): Promise<ProgressPoint[]> {
@@ -317,6 +358,7 @@ export async function getExerciseProgress(
     FROM set_logs sl
     JOIN workout_logs wl ON wl.id = sl.workout_log_id
     WHERE sl.exercise_id = ${exerciseId} AND sl.completed = 1
+      AND wl.user_id = ${userId}
     GROUP BY wl.id
     ORDER BY wl.date DESC
     LIMIT ${limit}
@@ -329,6 +371,7 @@ export type PersonalBest = { weight_kg: number; reps: number; date: number };
 /** Schwerster jemals abgehakter Satz dieser Übung (Tie-Break: mehr Wdh.). */
 export async function getPersonalBest(
   db: DB,
+  userId: string,
   exerciseId: string,
 ): Promise<PersonalBest | null> {
   const [row] = await db.all<PersonalBest>(sql`
@@ -336,6 +379,7 @@ export async function getPersonalBest(
     FROM set_logs sl
     JOIN workout_logs wl ON wl.id = sl.workout_log_id
     WHERE sl.exercise_id = ${exerciseId} AND sl.completed = 1 AND sl.weight_kg > 0
+      AND wl.user_id = ${userId}
     ORDER BY sl.weight_kg DESC, sl.reps DESC
     LIMIT 1
   `);

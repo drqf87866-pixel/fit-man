@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, or } from 'drizzle-orm';
 import { createDb } from '../db';
 import { exercises } from '../db/schema';
 import {
@@ -10,6 +10,7 @@ import {
   listPlans,
 } from '../lib/queries';
 import { estimateOneRepMax, formatDateShort, formatVolume, formatWeight, newId } from '../lib/format';
+import { requireUserId } from '../middleware/auth';
 import { CategoryBadge, Layout, PageHeader } from '../components/layout';
 import { TagBadges } from '../components/tags';
 import { ExerciseThumb } from '../components/exercise-image';
@@ -40,12 +41,15 @@ const DEFAULT_CATEGORIES = ['Brust', 'Rücken', 'Beine', 'Schultern', 'Arme', 'R
 // ---------------------------------------------------------------------------
 app.get('/exercises', async (c) => {
   const db = createDb(c.env.DB);
-  const all = await listExercises(db);
+  const userId = requireUserId(c);
+  const all = await listExercises(db, userId);
   const categories = [...new Set([...DEFAULT_CATEGORIES, ...all.map((e) => e.category)])];
+  // isCustom trifft hier automatisch nur auf eigene Übungen zu – fremde
+  // Custom-Übungen kommen in listExercises gar nicht erst mit.
   const customCount = all.filter((e) => e.isCustom).length;
 
   return c.html(
-    <Layout title="Übungen" active="exercises">
+    <Layout title="Übungen" active="exercises" user={c.get('user')}>
       <PageHeader title="Übungen" subtitle={`${all.length} in der Bibliothek`}>
         <button type="button" class="btn-secondary !px-3" data-open-dialog="new-exercise" aria-label="Eigene Übung hinzufügen">
           <Icon name="plus" size={20} />
@@ -233,14 +237,26 @@ app.get('/exercises', async (c) => {
 // ---------------------------------------------------------------------------
 app.get('/exercises/:id', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const id = c.req.param('id');
-  const [ex] = await db.select().from(exercises).where(eq(exercises.id, id)).limit(1);
+
+  // Sichtbarkeit: Standard-Übung für alle, Custom-Übung nur für den Owner.
+  const [ex] = await db
+    .select()
+    .from(exercises)
+    .where(
+      and(
+        eq(exercises.id, id),
+        or(eq(exercises.isCustom, false), eq(exercises.userId, userId)),
+      ),
+    )
+    .limit(1);
   if (!ex) return c.notFound();
 
   const [progress, best, plans] = await Promise.all([
-    getExerciseProgress(db, id),
-    getPersonalBest(db, id),
-    listPlans(db),
+    getExerciseProgress(db, userId, id),
+    getPersonalBest(db, userId, id),
+    listPlans(db, userId),
   ]);
   const oneRm = best ? estimateOneRepMax(best.weight_kg, best.reps) : null;
 
@@ -252,7 +268,7 @@ app.get('/exercises/:id', async (c) => {
   const tab = back.startsWith('/plans') ? 'training' : 'exercises';
 
   return c.html(
-    <Layout title={ex.name} active={tab}>
+    <Layout title={ex.name} active={tab} user={c.get('user')}>
       <PageHeader title={ex.name} subtitle={ex.category} back={back}>
         <button
           type="button"
@@ -440,6 +456,7 @@ app.get('/exercises/:id', async (c) => {
 
 app.post('/exercises', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const form = await c.req.formData();
 
   const name = String(form.get('name') ?? '').trim();
@@ -465,6 +482,7 @@ app.post('/exercises', async (c) => {
         equipment,
         description,
         isCustom: true,
+        userId,
       });
   }
   return c.redirect('/exercises', 303);
@@ -472,12 +490,22 @@ app.post('/exercises', async (c) => {
 
 app.post('/exercises/:id/delete', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const id = c.req.param('id');
 
-  // Nur eigene Übungen, und nur solange sie in keinem Plan/Log referenziert sind.
-  const usage = await countExerciseUsage(db, id);
+  // Nur eigene Übungen, und nur solange sie in keinem eigenen Plan/Log
+  // referenziert sind.
+  const usage = await countExerciseUsage(db, userId, id);
   if (usage === 0) {
-    await db.delete(exercises).where(and(eq(exercises.id, id), eq(exercises.isCustom, true)));
+    await db
+      .delete(exercises)
+      .where(
+        and(
+          eq(exercises.id, id),
+          eq(exercises.isCustom, true),
+          eq(exercises.userId, userId),
+        ),
+      );
   }
   return c.redirect('/exercises', 303);
 });
@@ -485,7 +513,8 @@ app.post('/exercises/:id/delete', async (c) => {
 /** JSON-Liste für den Übungs-Picker im aktiven Workout. */
 app.get('/api/exercises', async (c) => {
   const db = createDb(c.env.DB);
-  return c.json(await listExercises(db));
+  const userId = requireUserId(c);
+  return c.json(await listExercises(db, userId));
 });
 
 // ---------------------------------------------------------------------------
@@ -534,22 +563,33 @@ const ALT_SYSTEM = [
 type AltJson = { alternatives?: { exerciseId?: unknown; reason?: unknown }[] };
 
 app.get('/api/exercises/:id/alternatives', async (c) => {
-  // Das Ergebnis hängt nur an der Übung und der Bibliothek, nicht am Nutzer –
-  // wiederholte Aufrufe derselben Übung kosten so nichts.
-  const cache = caches.default;
-  const cacheKey = new Request(c.req.url);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
-
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const id = c.req.param('id');
 
-  const all = await listExercises(db);
+  // Bibliothek des Aufrufers (Standard + eigene Übungen). Wichtig: Der
+  // Edge-Cache unten ist URL-keyed und nutzerübergreifend – deshalb kommt in
+  // Prompt und Cache NUR die globale Standard-Bibliothek (is_custom = 0).
+  // Eigene Übungen im Prompt würden über den Cache zwischen Nutzern leaken.
+  const all = await listExercises(db, userId);
   const byId = new Map(all.map((e) => [e.id, e]));
   const source = byId.get(id);
   if (!source) return c.json({ error: 'unknown' }, 404);
 
-  const libraryLines = all
+  const standard = all.filter((e) => !e.isCustom);
+
+  // Das Ergebnis für Standard-Übungen hängt nur an der globalen Bibliothek,
+  // nicht am Nutzer – wiederholte Aufrufe derselben Übung kosten so nichts.
+  // Für eigene Übungen wird bewusst nicht gecacht.
+  const cacheable = !source.isCustom;
+  const cache = caches.default;
+  const cacheKey = new Request(c.req.url);
+  if (cacheable) {
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+  }
+
+  const libraryLines = standard
     .filter((e) => e.id !== id)
     .map(
       (e) => `${e.id}\t${e.name}\t${e.category}\t${e.targetMuscle}\t${e.movement}\t${e.equipment}`,
@@ -573,20 +613,22 @@ app.get('/api/exercises/:id/alternatives', async (c) => {
       // Der Nutzer steht im Gym: lieber schnell scheitern als lange warten.
       maxOutputTokens: 512,
       maxAttempts: 2,
+      userId,
     });
   } catch (err) {
     console.error('[fit-man] alternatives fehlgeschlagen', err);
     const key = err instanceof GeminiError ? geminiErrorKey(err) : 'http';
-    // Minutenbudget erschöpft -> 429, damit der Client den Fall unterscheiden kann.
-    const status = key === 'rate' ? 429 : 502;
+    // Tages-/Minutenbudget erschöpft -> 429, damit der Client unterscheiden kann.
+    const status = key === 'rate' || key === 'daily' ? 429 : 502;
     return c.json(
       { error: key, message: GEMINI_ERROR_TEXTS[key] ?? GEMINI_ERROR_TEXTS.http },
       status,
     );
   }
 
-  // Harte Grenze wie beim Plan-Generator: nur echte IDs, nie die Ausgangsübung,
-  // keine Duplikate, maximal drei.
+  // Harte Grenze wie beim Plan-Generator: nur IDs aus der (cachebaren!)
+  // Standard-Bibliothek, nie die Ausgangsübung, keine Duplikate, maximal drei.
+  const standardById = new Map(standard.map((e) => [e.id, e]));
   const parsed = raw as AltJson;
   const seen = new Set<string>();
   const alternatives: {
@@ -603,7 +645,7 @@ app.get('/api/exercises/:id/alternatives', async (c) => {
   if (Array.isArray(parsed?.alternatives)) {
     for (const alt of parsed.alternatives) {
       const altId = typeof alt?.exerciseId === 'string' ? alt.exerciseId.trim() : '';
-      const ex = byId.get(altId);
+      const ex = standardById.get(altId);
       if (!ex || altId === id || seen.has(altId)) continue;
       seen.add(altId);
       alternatives.push({
@@ -626,7 +668,7 @@ app.get('/api/exercises/:id/alternatives', async (c) => {
 
   const res = c.json({ alternatives });
   res.headers.set('Cache-Control', 'public, max-age=86400');
-  c.executionCtx.waitUntil(cache.put(cacheKey, res.clone()));
+  if (cacheable) c.executionCtx.waitUntil(cache.put(cacheKey, res.clone()));
   return res;
 });
 

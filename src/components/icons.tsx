@@ -20,6 +20,8 @@ const PATHS = {
     'M12 7v14',
     'M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z',
   ],
+  user: ['M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2'],
+  logOut: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'm16 17 5-5-5-5', 'M21 12H9'],
   history: ['M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8', 'M3 3v5h5', 'M12 7v5l4 2'],
   plus: ['M5 12h14', 'M12 5v14'],
   minus: ['M5 12h14'],
@@ -61,6 +63,7 @@ const PATHS = {
 /** Icons mit zusätzlichen SVG-Primitiven (circle/rect), die kein <path> sind. */
 const EXTRAS: Partial<Record<IconName, () => unknown>> = {
   search: () => <circle cx="11" cy="11" r="8" />,
+  user: () => <circle cx="12" cy="7" r="4" />,
   clock: () => <circle cx="12" cy="12" r="10" />,
   calendar: () => <rect x="3" y="4" width="18" height="18" rx="2" />,
   timer: () => <circle cx="12" cy="14" r="8" />,

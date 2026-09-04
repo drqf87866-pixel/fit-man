@@ -20,6 +20,14 @@ migrations_dir = "drizzle"
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 # Gemini Free Tier erlaubt 15 Anfragen/Minute – ein Puffer von 1 bleibt frei.
 GEMINI_RPM = "14"
+# PBKDF2-Iterationen für Passwort-Hashes. 100.000 sprengen das 10-ms-CPU-Limit
+# des Workers-Free-Plans, deshalb 25.000 – beim Login werden alte Hashes
+# automatisch auf den hier konfigurierten Wert angehoben (Rehash-on-Login).
+# Workers Paid darf den Wert gerne auf 100000 anheben.
+PBKDF2_ITERATIONS = "25000"
+# KI-Anfragen je Nutzer und Tag – Deckel gegen Kostenmissbrauch bei offener
+# Registrierung (das globale Minutenbudget bleibt GEMINI_RPM).
+AI_DAILY_LIMIT = "50"
 
 [observability]
 enabled = true

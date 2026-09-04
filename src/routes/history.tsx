@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FC } from 'hono/jsx';
 import { createDb } from '../db';
 import { setLogs, workoutLogs } from '../db/schema';
@@ -24,6 +24,7 @@ import {
 } from '../lib/format';
 import { isoWeek, parseWeekKey, weekBoundsSec, weekLabel, weekRangeLabel } from '../lib/weeks';
 import { geminiJson, GeminiError, GEMINI_ERROR_TEXTS } from '../lib/gemini';
+import { requireUserId } from '../middleware/auth';
 import { EmptyState, Layout, PageHeader } from '../components/layout';
 import { Icon, type IconName } from '../components/icons';
 import type { AppEnv } from '../types';
@@ -42,7 +43,7 @@ const Stat = ({ icon, value, label }: { icon: IconName; value: string; label: st
 // KI-Wochen-Rückblick
 // ---------------------------------------------------------------------------
 
-type RecapFlash = 'done' | 'nodata' | 'failed' | 'invalid' | 'rate' | null;
+type RecapFlash = 'done' | 'nodata' | 'failed' | 'invalid' | 'rate' | 'daily' | null;
 
 const FLASH_TEXT: Record<Exclude<RecapFlash, null>, string> = {
   done: 'Rückblick gespeichert.',
@@ -50,6 +51,7 @@ const FLASH_TEXT: Record<Exclude<RecapFlash, null>, string> = {
   failed: 'Der KI-Rückblick konnte nicht erstellt werden. Bitte später erneut versuchen.',
   invalid: 'Ungültiger Wochen-Schlüssel.',
   rate: GEMINI_ERROR_TEXTS.rate,
+  daily: GEMINI_ERROR_TEXTS.daily,
 };
 
 const FlashBanner: FC<{ kind: RecapFlash }> = ({ kind }) => {
@@ -108,7 +110,7 @@ function parseHighlights(json: string): string[] {
   }
 }
 
-function normalizeRecap(raw: unknown, weekKey: string): Parameters<typeof upsertRecap>[1] {
+function normalizeRecap(raw: unknown, weekKey: string): Parameters<typeof upsertRecap>[2] {
   const parsed = parseWeekKey(weekKey) ?? { year: 0, week: 0 };
   const r = (raw ?? {}) as RecapJson;
   const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -175,10 +177,14 @@ const WEEK_CARD_LIMIT = 12;
 // ---------------------------------------------------------------------------
 app.get('/history', async (c) => {
   const db = createDb(c.env.DB);
-  const [workouts, stats] = await Promise.all([listWorkouts(db, 1000), getStats(db)]);
+  const userId = requireUserId(c);
+  const [workouts, stats] = await Promise.all([
+    listWorkouts(db, userId, 1000),
+    getStats(db, userId),
+  ]);
   const q = c.req.query('recap') ?? '';
   const flash: RecapFlash =
-    q === 'done' || q === 'nodata' || q === 'failed' || q === 'invalid' || q === 'rate'
+    q === 'done' || q === 'nodata' || q === 'failed' || q === 'invalid' || q === 'rate' || q === 'daily'
       ? q
       : null;
 
@@ -198,11 +204,11 @@ app.get('/history', async (c) => {
   }
   const weekList = [...groups.values()];
 
-  const recaps = await listRecapsSafe(db, weekList.map((g) => g.weekKey));
+  const recaps = await listRecapsSafe(db, userId, weekList.map((g) => g.weekKey));
   const recapByWeek = new Map(recaps.map((r) => [r.weekKey, r]));
 
   return c.html(
-    <Layout title="Verlauf" active="history">
+    <Layout title="Verlauf" active="history" user={c.get('user')}>
       <PageHeader title="Verlauf" subtitle="Deine absolvierten Trainings" />
 
       {workouts.length === 0 ? (
@@ -336,6 +342,7 @@ app.get('/history', async (c) => {
 // ---------------------------------------------------------------------------
 app.post('/history/recap', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const form = await c.req.formData();
   const weekKey = String(form.get('weekKey') ?? '').trim();
   const fail = (q: string) => c.redirect(`/history?recap=${q}`, 303);
@@ -343,24 +350,26 @@ app.post('/history/recap', async (c) => {
   const bounds = weekBoundsSec(weekKey);
   if (!bounds) return fail('invalid');
 
-  const workouts = await listWorkoutsRange(db, bounds.fromSec, bounds.toSec);
+  const workouts = await listWorkoutsRange(db, userId, bounds.fromSec, bounds.toSec);
   if (workouts.length === 0) return fail('nodata');
 
   try {
-    const agg = await getWeekExerciseAggregates(db, bounds.fromSec, bounds.toSec);
-    const user = buildWeekSnapshot(weekKey, bounds.fromSec, bounds.toSec, workouts, agg);
+    const agg = await getWeekExerciseAggregates(db, userId, bounds.fromSec, bounds.toSec);
+    const snapshot = buildWeekSnapshot(weekKey, bounds.fromSec, bounds.toSec, workouts, agg);
     const raw = await geminiJson<unknown>(c.env, {
       system: RECAP_SYSTEM,
-      user,
+      user: snapshot,
       schema: RECAP_SCHEMA,
+      userId,
     });
     const data = normalizeRecap(raw, weekKey);
-    await upsertRecap(db, data);
+    await upsertRecap(db, userId, data);
     return c.redirect(`/history?recap=done#week-${weekKey}`, 303);
   } catch (err) {
     console.error('[fit-man] Recap fehlgeschlagen', err);
-    // Minutenbudget erschöpft: eigener Hinweis, damit "später erneut" konkret wird.
+    // Minuten-/Tagesbudget erschöpft: eigene Hinweise statt "später erneut".
     if (err instanceof GeminiError && err.code === 'rate-limit') return fail('rate');
+    if (err instanceof GeminiError && err.code === 'daily-limit') return fail('daily');
     return fail('failed');
   }
 });
@@ -370,7 +379,8 @@ app.post('/history/recap', async (c) => {
 // ---------------------------------------------------------------------------
 app.get('/history/:id', async (c) => {
   const db = createDb(c.env.DB);
-  const detail = await getWorkoutDetail(db, c.req.param('id'));
+  const userId = requireUserId(c);
+  const detail = await getWorkoutDetail(db, userId, c.req.param('id'));
   if (!detail) return c.notFound();
 
   const { log, groups } = detail;
@@ -382,7 +392,7 @@ app.get('/history/:id', async (c) => {
   const setCount = groups.flatMap((g) => g.sets).filter((s) => s.completed).length;
 
   return c.html(
-    <Layout title={log.planName} active="history">
+    <Layout title={log.planName} active="history" user={c.get('user')}>
       <PageHeader title={log.planName} subtitle={formatDate(date)} back="/history" />
 
       <div class="grid grid-cols-3 gap-2 px-4 py-4">
@@ -462,7 +472,18 @@ app.get('/history/:id', async (c) => {
 
 app.post('/history/:id/delete', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const id = c.req.param('id');
+
+  // Erst prüfen, ob das Training dem Aufrufer gehört – der ungeschützte Batch
+  // würde auch fremde Trainings löschen.
+  const [log] = await db
+    .select({ id: workoutLogs.id })
+    .from(workoutLogs)
+    .where(and(eq(workoutLogs.id, id), eq(workoutLogs.userId, userId)))
+    .limit(1);
+  if (!log) return c.notFound();
+
   await db.batch([
     db.delete(setLogs).where(eq(setLogs.workoutLogId, id)),
     db.delete(workoutLogs).where(eq(workoutLogs.id, id)),

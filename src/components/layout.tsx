@@ -1,12 +1,14 @@
 import type { FC, PropsWithChildren } from 'hono/jsx';
 import { Icon, type IconName } from './icons';
+import type { SessionUser } from '../types';
 
-export type NavKey = 'training' | 'exercises' | 'history' | null;
+export type NavKey = 'training' | 'exercises' | 'history' | 'profile' | null;
 
 const NAV: { key: Exclude<NavKey, null>; href: string; label: string; icon: IconName }[] = [
   { key: 'training', href: '/', label: 'Training', icon: 'dumbbell' },
   { key: 'exercises', href: '/exercises', label: 'Übungen', icon: 'library' },
   { key: 'history', href: '/history', label: 'Verlauf', icon: 'history' },
+  { key: 'profile', href: '/profil', label: 'Profil', icon: 'user' },
 ];
 
 const BottomNav: FC<{ active: NavKey }> = ({ active }) => (
@@ -38,9 +40,14 @@ type LayoutProps = PropsWithChildren<{
   active?: NavKey;
   /** Blendet die Bottom-Nav aus (z. B. im aktiven Workout) */
   bare?: boolean;
+  /**
+   * Eingeloggter Nutzer – Navigation und der fitman-user-Meta-Tag erscheinen
+   * nur damit (Login-/Registrier-Seiten reichen ihn nicht durch).
+   */
+  user?: SessionUser | null;
 }>;
 
-export const Layout: FC<LayoutProps> = ({ title, active = null, bare = false, children }) => (
+export const Layout: FC<LayoutProps> = ({ title, active = null, bare = false, user, children }) => (
   <html lang="de">
     <head>
       <meta charset="UTF-8" />
@@ -48,6 +55,9 @@ export const Layout: FC<LayoutProps> = ({ title, active = null, bare = false, ch
       <meta name="theme-color" content="#0a0e13" />
       <meta name="mobile-web-app-capable" content="yes" />
       <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+      {/* Der geteilte, an der Edge gecachte app.js liest den Nutzer nur aus dem
+          DOM – User-Daten gehören nie ins Asset selbst. */}
+      <meta name="fitman-user" content={user?.id ?? ''} />
       <title>{title} · FitMan</title>
       <link rel="stylesheet" href="/styles.css" />
       <link rel="manifest" href="/manifest.webmanifest" />
@@ -55,7 +65,7 @@ export const Layout: FC<LayoutProps> = ({ title, active = null, bare = false, ch
     </head>
     <body class={bare ? '' : 'pb-24'}>
       <div class="mx-auto min-h-dvh max-w-lg">{children}</div>
-      {bare ? null : <BottomNav active={active} />}
+      {bare || !user ? null : <BottomNav active={active} />}
       <script src="/app.js" defer></script>
     </body>
   </html>

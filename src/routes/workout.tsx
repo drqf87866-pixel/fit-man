@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { createDb } from '../db';
 import { setLogs, workoutLogs, workoutPlans } from '../db/schema';
 import { getPlanExercises, getPreviousSets, listExercises } from '../lib/queries';
 import { newId } from '../lib/format';
+import { requireUserId } from '../middleware/auth';
 import { Layout } from '../components/layout';
 import { Icon } from '../components/icons';
 import type { AppEnv } from '../types';
@@ -20,16 +21,21 @@ const app = new Hono<AppEnv>();
 // ---------------------------------------------------------------------------
 app.get('/workout/active', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const planId = c.req.query('plan') ?? null;
 
   const [plan] = planId
-    ? await db.select().from(workoutPlans).where(eq(workoutPlans.id, planId)).limit(1)
+    ? await db
+        .select()
+        .from(workoutPlans)
+        .where(and(eq(workoutPlans.id, planId), eq(workoutPlans.userId, userId)))
+        .limit(1)
     : [];
 
   const [planItems, allExercises, previous] = await Promise.all([
     plan ? getPlanExercises(db, plan.id) : Promise.resolve([]),
-    listExercises(db),
-    getPreviousSets(db),
+    listExercises(db, userId),
+    getPreviousSets(db, userId),
   ]);
 
   const payload = {
@@ -111,20 +117,28 @@ const num = (v: unknown, fallback = 0) => {
 
 app.post('/api/workouts', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const body = await c.req.json<IncomingWorkout>().catch(() => null);
 
   if (!body || !Array.isArray(body.sets) || body.sets.length === 0) {
     return c.json({ error: 'Keine Sätze übermittelt.' }, 400);
   }
 
-  // Nur Übungen, die es wirklich gibt – schützt vor FK-Fehlern im Batch.
-  const known = new Set((await listExercises(db)).map((e) => e.id));
+  // Nur Übungen aus der sichtbaren Bibliothek (Standard + eigene) – schützt
+  // vor FK-Fehlern im Batch und vor Loggen auf fremden Custom-Übungen.
+  const known = new Set((await listExercises(db, userId)).map((e) => e.id));
   const sets = body.sets.filter((s) => known.has(s.exerciseId));
   if (sets.length === 0) return c.json({ error: 'Keine gültigen Sätze.' }, 400);
 
+  // Pläne fremder Nutzer werden still zum Freien Training – gleiche Toleranz
+  // wie vorher bei unbekannten Plänen.
   let planId = body.planId ?? null;
   if (planId) {
-    const [plan] = await db.select().from(workoutPlans).where(eq(workoutPlans.id, planId)).limit(1);
+    const [plan] = await db
+      .select()
+      .from(workoutPlans)
+      .where(and(eq(workoutPlans.id, planId), eq(workoutPlans.userId, userId)))
+      .limit(1);
     if (!plan) planId = null;
   }
 
@@ -132,6 +146,7 @@ app.post('/api/workouts', async (c) => {
   const statements = [
     db.insert(workoutLogs).values({
       id: workoutId,
+      userId,
       planId,
       planName: String(body.planName ?? 'Freies Training').slice(0, 80),
       date: new Date(num(body.date, Date.now())),

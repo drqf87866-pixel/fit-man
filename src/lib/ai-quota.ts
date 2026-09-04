@@ -20,6 +20,9 @@ const WINDOW_MS = 60_000;
 /** Default-Budget: 14 statt 15, damit ein Zählfehler nicht sofort ins 429 läuft. */
 export const DEFAULT_AI_RPM = 14;
 
+/** Tageslimit je Nutzer – schützt die Gemini-Kosten bei offener Registrierung. */
+export const DEFAULT_AI_DAILY_LIMIT = 50;
+
 export type AiQuotaResult =
   | { ok: true }
   /** Kein Slot frei; `retryAfterSec` = Sekunden bis der älteste Slot verfällt. */
@@ -32,6 +35,27 @@ export function aiRpmLimit(raw?: string): number {
   return Math.min(Math.floor(n), 15);
 }
 
+/** Liest das Tageslimit (AI_DAILY_LIMIT); hart auf 1000 gedeckelt. */
+export function aiDailyLimit(raw?: string): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_AI_DAILY_LIMIT;
+  return Math.min(Math.floor(n), 1000);
+}
+
+/** Anzahl der KI-Calls dieses Nutzers seit UTC-Mitternacht. */
+export async function countUserAiCallsToday(
+  db: D1Database,
+  userId: string,
+  now = Date.now(),
+): Promise<number> {
+  const dayStart = now - (now % 86_400_000);
+  const row = await db
+    .prepare('SELECT COUNT(*) AS n FROM ai_requests WHERE user_id = ?1 AND created_at > ?2')
+    .bind(userId, dayStart)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
 /**
  * Versucht, einen Slot im aktuellen 60-s-Fenster zu belegen.
  *
@@ -41,7 +65,12 @@ export function aiRpmLimit(raw?: string): number {
  * belegtem Fenster schreibt der INSERT schlicht keine Zeile. `RETURNING id`
  * macht genau das sichtbar: leeres `results` = kein Slot bekommen.
  */
-export async function reserveAiSlot(db: D1Database, limit: number): Promise<AiQuotaResult> {
+export async function reserveAiSlot(
+  db: D1Database,
+  limit: number,
+  /** Optionaler Aufrufer – landet in ai_requests.user_id für das Tageslimit. */
+  userId?: string,
+): Promise<AiQuotaResult> {
   const now = Date.now();
   const windowStart = now - WINDOW_MS;
 
@@ -50,11 +79,11 @@ export async function reserveAiSlot(db: D1Database, limit: number): Promise<AiQu
     db.prepare('DELETE FROM ai_requests WHERE created_at <= ?1').bind(windowStart),
     db
       .prepare(
-        `INSERT INTO ai_requests (created_at)
-         SELECT ?1 WHERE (SELECT COUNT(*) FROM ai_requests WHERE created_at > ?2) < ?3
+        `INSERT INTO ai_requests (created_at, user_id)
+         SELECT ?1, ?4 WHERE (SELECT COUNT(*) FROM ai_requests WHERE created_at > ?2) < ?3
          RETURNING id`,
       )
-      .bind(now, windowStart, limit),
+      .bind(now, windowStart, limit, userId ?? null),
   ]);
 
   if ((inserted.results?.length ?? 0) > 0) return { ok: true };

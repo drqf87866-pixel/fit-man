@@ -43,6 +43,13 @@
       "when": 1788538058956,
       "tag": "0005_add_ai_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788540040254,
+      "tag": "0006_add_auth",
+      "breakpoints": true
     }
   ]
 }

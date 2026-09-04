@@ -6,7 +6,59 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-or
  * Grund: Für den transaktionalen Batch-Insert am Workout-Ende muss die ID des
  * workout_logs bereits bekannt sein, bevor die set_logs geschrieben werden.
  * Mit AUTOINCREMENT ginge das nur über einen zweiten Roundtrip.
+ *
+ * Multi-User-Invariante: plan_exercises und set_logs bekommen bewusst KEINE
+ * user_id-Spalte – sie sind immer über ihren besessenen Eltern-Datensatz
+ * erreicht (plan_exercises -> workout_plans, set_logs -> workout_logs).
+ * Jeder Query muss deshalb den Eltern-Join um user_id ergänzen.
  */
+
+// ---------------------------------------------------------------------------
+// users – Accounts (E-Mail + Passwort, siehe lib/auth.ts)
+// ---------------------------------------------------------------------------
+export const users = sqliteTable(
+  'users',
+  {
+    id: text('id').primaryKey(),
+    /** Normalisiert (trim + lowercase) – UNIQUE schließt Doppelt Konten aus. */
+    email: text('email').notNull(),
+    /** Format: pbkdf2$<iterations>$<salt_b64>$<hash_b64> (siehe lib/auth.ts) */
+    passwordHash: text('password_hash').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => [uniqueIndex('idx_users_email').on(t.email)],
+);
+
+// ---------------------------------------------------------------------------
+// sessions – Login-Sessions (Cookie-Token, nur der Hash liegt in der DB)
+// ---------------------------------------------------------------------------
+export const sessions = sqliteTable(
+  'sessions',
+  {
+    /** SHA-256-Hex des Cookie-Tokens – das Token selbst wird nie gespeichert. */
+    tokenHash: text('token_hash').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => [index('idx_sessions_user').on(t.userId)],
+);
+
+// ---------------------------------------------------------------------------
+// login_attempts – Fixed-Window-Throttle je E-Mail (siehe lib/auth.ts)
+// ---------------------------------------------------------------------------
+export const loginAttempts = sqliteTable('login_attempts', {
+  email: text('email').primaryKey(),
+  /** Fensterbeginn in Unix-Sekunden */
+  windowStart: integer('window_start').notNull(),
+  count: integer('count').notNull(),
+});
 
 // ---------------------------------------------------------------------------
 // exercises – Übungsbibliothek (Standard + eigene Übungen)
@@ -32,6 +84,8 @@ export const exercises = sqliteTable(
     /** Kurze Erklärung (2-3 Sätze) für die Detailseite. */
     description: text('description').notNull().default(''),
     isCustom: integer('is_custom', { mode: 'boolean' }).notNull().default(false),
+    /** Owner – nur bei eigenen Übungen gesetzt; NULL = globale Seed-Daten. */
+    userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
   },
   (t) => [index('idx_exercises_category').on(t.category)],
 );
@@ -39,14 +93,20 @@ export const exercises = sqliteTable(
 // ---------------------------------------------------------------------------
 // workout_plans – Trainingspläne
 // ---------------------------------------------------------------------------
-export const workoutPlans = sqliteTable('workout_plans', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  description: text('description').notNull().default(''),
-  createdAt: integer('created_at', { mode: 'timestamp' })
-    .notNull()
-    .default(sql`(unixepoch())`),
-});
+export const workoutPlans = sqliteTable(
+  'workout_plans',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    /** Owner – NULL = Alt-Daten vor der Auth-Umstellung (werden per Backfill zugeordnet). */
+    userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => [index('idx_workout_plans_user_created').on(t.userId, t.createdAt)],
+);
 
 // ---------------------------------------------------------------------------
 // plan_exercises – Übungen eines Plans inkl. Reihenfolge
@@ -79,13 +139,18 @@ export const workoutLogs = sqliteTable(
     planId: text('plan_id').references(() => workoutPlans.id, { onDelete: 'set null' }),
     /** Snapshot des Plannamens – bleibt erhalten, wenn der Plan gelöscht wird */
     planName: text('plan_name').notNull().default('Freies Training'),
+    /** Owner – NULL = Alt-Daten vor der Auth-Umstellung (werden per Backfill zugeordnet). */
+    userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
     date: integer('date', { mode: 'timestamp' })
       .notNull()
       .default(sql`(unixepoch())`),
     durationSeconds: integer('duration_seconds').notNull().default(0),
     notes: text('notes').notNull().default(''),
   },
-  (t) => [index('idx_workout_logs_date').on(t.date)],
+  (t) => [
+    index('idx_workout_logs_date').on(t.date),
+    index('idx_workout_logs_user_date').on(t.userId, t.date),
+  ],
 );
 
 // ---------------------------------------------------------------------------
@@ -119,8 +184,10 @@ export const recaps = sqliteTable(
   'recaps',
   {
     id: text('id').primaryKey(),
-    /** Schlüssel "2026-35" (ISO-Jahr-KW) – eindeutig je Woche */
+    /** Schlüssel "2026-35" (ISO-Jahr-KW) – eindeutig je Nutzer und Woche */
     weekKey: text('week_key').notNull(),
+    /** Owner – Unique gilt je Nutzer, siehe idx_recaps_user_week unten. */
+    userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
     year: integer('year').notNull(),
     week: integer('week').notNull(),
     /** Einprägsame deutsche Schlagzeile (von Gemini) */
@@ -138,7 +205,7 @@ export const recaps = sqliteTable(
       .notNull()
       .default(sql`(unixepoch())`),
   },
-  (t) => [uniqueIndex('idx_recaps_week_key').on(t.weekKey)],
+  (t) => [uniqueIndex('idx_recaps_user_week').on(t.userId, t.weekKey)],
 );
 
 // ---------------------------------------------------------------------------
@@ -154,6 +221,8 @@ export const aiRequests = sqliteTable(
     id: integer('id').primaryKey({ autoIncrement: true }),
     /** Zeitpunkt des Calls in ms seit Epoch (Date.now()) */
     createdAt: integer('created_at').notNull(),
+    /** Aufrufer – ohne FK (Hot-Insert-Path); Basis für das Tageslimit je Nutzer. */
+    userId: text('user_id'),
   },
   (t) => [index('idx_ai_requests_created_at').on(t.createdAt)],
 );
@@ -195,3 +264,4 @@ export type WorkoutLog = typeof workoutLogs.$inferSelect;
 export type SetLog = typeof setLogs.$inferSelect;
 export type Recap = typeof recaps.$inferSelect;
 export type NewRecap = typeof recaps.$inferInsert;
+export type User = typeof users.$inferSelect;

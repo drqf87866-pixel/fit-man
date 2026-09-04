@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, or, sql } from 'drizzle-orm';
 import { createDb, type DB } from '../db';
 import {
   exercises as exercisesTable,
@@ -9,11 +9,20 @@ import {
 } from '../db/schema';
 import { getPlanExercises, listExercises, listPlans, type PlanListRow } from '../lib/queries';
 import { formatRelative, newId } from '../lib/format';
+import { requireUserId } from '../middleware/auth';
 import { EmptyState, Layout, PageHeader } from '../components/layout';
 import { PlanEditor, type PlanEditorItem } from '../components/plan-editor';
 import { Icon } from '../components/icons';
 import { geminiJson, GeminiError, geminiErrorKey, GEMINI_ERROR_TEXTS } from '../lib/gemini';
-import type { AppEnv } from '../types';
+import type { AppEnv, SessionUser } from '../types';
+
+/**
+ * Sichtbarkeits-Filter für Übungs-Lookups: Standard-Bibliothek global, eigene
+ * Übungen nur dem Owner. Bevorzugt über listExercises(db, userId) nutzen;
+ * dieses Snippet für Einzel-Lookups per ID.
+ */
+const visibleExercise = (userId: string) =>
+  or(eq(exercisesTable.isCustom, false), eq(exercisesTable.userId, userId));
 
 const app = new Hono<AppEnv>();
 
@@ -56,10 +65,11 @@ const PlanCard = ({ plan }: { plan: PlanListRow }) => (
 
 app.get('/', async (c) => {
   const db = createDb(c.env.DB);
-  const plans = await listPlans(db);
+  const userId = requireUserId(c);
+  const plans = await listPlans(db, userId);
 
   return c.html(
-    <Layout title="Training" active="training">
+    <Layout title="Training" active="training" user={c.get('user')}>
       <PageHeader title="Training" subtitle="Pläne & Schnellstart">
         <a href="/plans/new" class="btn-secondary !px-3" aria-label="Neuen Plan erstellen">
           <Icon name="plus" size={20} />
@@ -131,6 +141,7 @@ function toEditorItem(ex: Exercise, targetSets = 3): PlanEditorItem {
 
 app.get('/plans/new', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
 
   // ?exercise=<id> kommt von "Neuer Plan mit dieser Übung" aus der Bibliothek.
   const seedId = c.req.query('exercise');
@@ -139,13 +150,13 @@ app.get('/plans/new', async (c) => {
     const [ex] = await db
       .select()
       .from(exercisesTable)
-      .where(eq(exercisesTable.id, seedId))
+      .where(and(eq(exercisesTable.id, seedId), visibleExercise(userId)))
       .limit(1);
     if (ex) items = [toEditorItem(ex)];
   }
 
   return c.html(
-    <Layout title="Neuer Plan" active="training">
+    <Layout title="Neuer Plan" active="training" user={c.get('user')}>
       <PageHeader title="Neuer Plan" back="/" />
       <PlanEditor items={items} action="/plans" />
     </Layout>,
@@ -193,6 +204,7 @@ function planExerciseInserts(db: DB, planId: string, ids: string[], form: FormDa
 
 app.post('/plans', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const form = await c.req.formData();
 
   const name = String(form.get('name') ?? '').trim();
@@ -203,7 +215,7 @@ app.post('/plans', async (c) => {
 
   const planId = newId('plan');
   const statements = [
-    db.insert(workoutPlans).values({ id: planId, name, description, createdAt: new Date() }),
+    db.insert(workoutPlans).values({ id: planId, name, description, userId, createdAt: new Date() }),
     ...planExerciseInserts(db, planId, exerciseIds, form),
   ];
 
@@ -260,8 +272,16 @@ const GENERATE_ERRORS: Record<string, string> = {
   invalid: 'Die Antwort war nicht verwertbar. Bitte formuliere den Wunsch anders.',
 };
 
-const GenerateForm = ({ error, prompt }: { error?: string; prompt?: string }) => (
-  <Layout title="KI-Plan erstellen" active="training">
+const GenerateForm = ({
+  error,
+  prompt,
+  user,
+}: {
+  error?: string;
+  prompt?: string;
+  user: SessionUser | null;
+}) => (
+  <Layout title="KI-Plan erstellen" active="training" user={user}>
     <PageHeader title="KI-Plan erstellen" subtitle="Per Gemini einen Entwurf bauen" back="/" />
     <form method="post" action="/plans/generate" class="flex flex-col gap-4 px-4 py-4">
       {error ? (
@@ -309,17 +329,21 @@ const GenerateForm = ({ error, prompt }: { error?: string; prompt?: string }) =>
 app.get('/plans/generate', (c) => {
   const error = c.req.query('error');
   const prompt = c.req.query('prompt') ?? '';
-  return c.html(<GenerateForm error={error} prompt={prompt} />);
+  return c.html(<GenerateForm error={error} prompt={prompt} user={c.get('user')} />);
 });
 
 app.post('/plans/generate', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
+  const user = c.get('user');
   const form = await c.req.formData();
   const prompt = String(form.get('prompt') ?? '').trim();
 
-  if (!prompt) return c.html(<GenerateForm error="prompt" prompt={prompt} />);
+  if (!prompt) return c.html(<GenerateForm error="prompt" prompt={prompt} user={user} />);
 
-  const all = await listExercises(db);
+  // Bibliothek je Nutzer: die KI sieht nur Standard-Übungen + eigene Übungen
+  // des Aufrufers, nie die Custom-Übungen anderer Nutzer.
+  const all = await listExercises(db, userId);
   const byId = new Map(all.map((e) => [e.id, e]));
   const libraryLines = all
     .map(
@@ -327,15 +351,20 @@ app.post('/plans/generate', async (c) => {
     )
     .join('\n');
 
-  const user = `Wunsch des Nutzers:\n"""${prompt.slice(0, 500)}"""\n\nVERFÜGBARE ÜBUNGEN (id \t Name \t Kategorie \t Zielmuskel \t Bewegung \t Equipment):\n${libraryLines}`;
+  const userPrompt = `Wunsch des Nutzers:\n"""${prompt.slice(0, 500)}"""\n\nVERFÜGBARE ÜBUNGEN (id \t Name \t Kategorie \t Zielmuskel \t Bewegung \t Equipment):\n${libraryLines}`;
 
   let raw: unknown;
   try {
-    raw = await geminiJson<unknown>(c.env, { system: PLAN_SYSTEM, user, schema: PLAN_SCHEMA });
+    raw = await geminiJson<unknown>(c.env, {
+      system: PLAN_SYSTEM,
+      user: userPrompt,
+      schema: PLAN_SCHEMA,
+      userId,
+    });
   } catch (err) {
     console.error('[fit-man] plan-generate fehlgeschlagen', err);
     const key = err instanceof GeminiError ? geminiErrorKey(err) : 'http';
-    return c.html(<GenerateForm error={key} prompt={prompt} />);
+    return c.html(<GenerateForm error={key} prompt={prompt} user={user} />);
   }
 
   // Serverseitige Validierung ist die harte Grenze: nur IDs aus der Bibliothek,
@@ -354,7 +383,7 @@ app.post('/plans/generate', async (c) => {
     }
   }
   if (selected.size === 0) {
-    return c.html(<GenerateForm error="invalid" prompt={prompt} />);
+    return c.html(<GenerateForm error="invalid" prompt={prompt} user={user} />);
   }
 
   const name = (typeof plan?.name === 'string' ? plan.name.trim() : '') || 'KI-Plan';
@@ -362,7 +391,7 @@ app.post('/plans/generate', async (c) => {
 
   // Vorausgefüllten, gewohnten Builder rendern – Speichern übernimmt POST /plans.
   return c.html(
-    <Layout title="Plan-Entwurf" active="training">
+    <Layout title="Plan-Entwurf" active="training" user={c.get('user')}>
       <PageHeader title="Plan-Entwurf" subtitle="KI-generiert" back="/plans/generate">
         <a href="/plans/generate" class="btn-ghost !min-w-11 !px-0" aria-label="Neue Idee">
           <Icon name="sparkles" size={20} />
@@ -386,15 +415,20 @@ app.post('/plans/generate', async (c) => {
 // ---------------------------------------------------------------------------
 app.get('/plans/:id', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const id = c.req.param('id');
 
-  const [plan] = await db.select().from(workoutPlans).where(eq(workoutPlans.id, id)).limit(1);
+  const [plan] = await db
+    .select()
+    .from(workoutPlans)
+    .where(and(eq(workoutPlans.id, id), eq(workoutPlans.userId, userId)))
+    .limit(1);
   if (!plan) return c.notFound();
 
   const items = await getPlanExercises(db, id);
 
   return c.html(
-    <Layout title={plan.name} active="training">
+    <Layout title={plan.name} active="training" user={c.get('user')}>
       <PageHeader title={plan.name} subtitle={plan.description || undefined} back="/" />
 
       <div class="px-4 py-4">
@@ -445,17 +479,22 @@ app.get('/plans/:id/edit', (c) => c.redirect(`/plans/${c.req.param('id')}`, 302)
  */
 app.post('/plans/:id/exercises', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const id = c.req.param('id');
   const form = await c.req.formData();
   const exerciseId = String(form.get('exerciseId') ?? '').trim();
 
-  const [plan] = await db.select().from(workoutPlans).where(eq(workoutPlans.id, id)).limit(1);
+  const [plan] = await db
+    .select()
+    .from(workoutPlans)
+    .where(and(eq(workoutPlans.id, id), eq(workoutPlans.userId, userId)))
+    .limit(1);
   if (!plan) return c.notFound();
 
   const [ex] = await db
     .select({ id: exercisesTable.id })
     .from(exercisesTable)
-    .where(eq(exercisesTable.id, exerciseId))
+    .where(and(eq(exercisesTable.id, exerciseId), visibleExercise(userId)))
     .limit(1);
   if (!ex) return c.redirect(`/plans/${id}`, 303);
 
@@ -484,9 +523,14 @@ app.post('/plans/:id/exercises', async (c) => {
 
 app.post('/plans/:id', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const id = c.req.param('id');
 
-  const [plan] = await db.select().from(workoutPlans).where(eq(workoutPlans.id, id)).limit(1);
+  const [plan] = await db
+    .select()
+    .from(workoutPlans)
+    .where(and(eq(workoutPlans.id, id), eq(workoutPlans.userId, userId)))
+    .limit(1);
   if (!plan) return c.notFound();
 
   const form = await c.req.formData();
@@ -509,7 +553,18 @@ app.post('/plans/:id', async (c) => {
 
 app.post('/plans/:id/delete', async (c) => {
   const db = createDb(c.env.DB);
+  const userId = requireUserId(c);
   const id = c.req.param('id');
+
+  // Erst prüfen, ob der Plan dem Aufrufer gehört – der ungeschützte Batch
+  // würde auch fremde Pläne löschen.
+  const [plan] = await db
+    .select({ id: workoutPlans.id })
+    .from(workoutPlans)
+    .where(and(eq(workoutPlans.id, id), eq(workoutPlans.userId, userId)))
+    .limit(1);
+  if (!plan) return c.notFound();
+
   await db.batch([
     db.delete(planExercises).where(eq(planExercises.planId, id)),
     db.delete(workoutPlans).where(eq(workoutPlans.id, id)),

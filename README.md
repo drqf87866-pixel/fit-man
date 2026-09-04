@@ -19,6 +19,8 @@ Frontend und Backend laufen im selben Worker: Hono rendert die Seiten serverseit
 
 | Route              | Inhalt                                                              |
 | ------------------ | ------------------------------------------------------------------- |
+| `/login`           | Anmeldung (E-Mail + Passwort)                                        |
+| `/registrieren`    | Neues Konto erstellen (offen für alle)                               |
 | `/`                | Trainingspläne, Schnellstart, KI-Plan                                |
 | `/plans/new`       | Plan anlegen: Name + Übungen aus dem Picker-Sheet                    |
 | `/plans/:id`       | Plan verwalten: starten, sortieren, Sätze, hinzufügen, löschen       |
@@ -27,9 +29,10 @@ Frontend und Backend laufen im selben Worker: Hono rendert die Seiten serverseit
 | `/exercises/:id`   | Übungsdetail: Bilder, Erklärung, Fortschritt, „Zu Plan hinzufügen"   |
 | `/history`         | Verlauf mit Kennzahlen                                               |
 | `/history/:id`     | Detailansicht eines Workouts (alle Sätze, Gewichte, Wiederholungen)  |
+| `/profil`          | Konto, Passwort ändern, Abmelden                                     |
 
 Bottom-Navigation (fix, `env(safe-area-inset-bottom)`-bewusst): **Training ·
-Übungen · Verlauf**.
+Übungen · Verlauf · Profil**.
 
 ### Wer macht was
 
@@ -69,6 +72,87 @@ Zeilenmarkup existiert dadurch nur an einer Stelle.
 
 ---
 
+## Auth & Multi-User
+
+Alle Seiten (außer `/login`, `/registrieren`, `/healthz` und den statischen
+Assets) sind hinter einer Session verpflichtend — unangemeldet gibt es
+`303 → /login` bzw. für `/api/*` einen `401`. Drei Schichten:
+
+| Datei | Aufgabe |
+| ----- | ------- |
+| `src/lib/auth.ts` | Reine Logik: PBKDF2-Hash/Verify, Session-Tokens, Login-Throttle |
+| `src/middleware/auth.ts` | Hono-Glue: Session laden, Zugriffe schützen, CSRF-Origin-Check |
+| `src/routes/auth.tsx` | Login, Registrierung, Logout, Profil |
+
+### Wie es funktioniert
+
+- **Passwörter** werden per PBKDF2-SHA256 (WebCrypto, läuft nativ im Worker)
+  gehasht. Das Format `pbkdf2$<iterations>$<salt>$<hash>` ist selbstbeschreibend:
+  Bei Login wird geprüft, ob der gespeicherte Hash schwächer ist als aktuell
+  konfiguriert (`PBKDF2_ITERATIONS` in `wrangler.toml`), und dann still auf den
+  neuen Wert angehoben. **Wichtig:** Der Workers-Free-Plan erlaubt nur 10 ms CPU
+  pro Request — deshalb steht der Deploy-Wert auf `25000`. Auf Workers Paid darf
+  er auf `100000` angehoben werden.
+- **Sessions** sind HttpOnly/Secure/SameSite=Lax-Cookies (30 Tage, rolling). In
+  D1 liegt nur der SHA-256-Hash des Tokens (`sessions.token_hash`), das Token
+  selbst nie. Abgelaufene Sessions werden gelegentlich aufgeräumt.
+- **Registrierung ist offen.** Daraus folgt: Die KI-Endpunkte (Gemini) sind für
+  jeden Registrierten nutzbar. Neben dem globalen Minutenbudget (`GEMINI_RPM`)
+  greift deshalb ein Tageslimit je Nutzer (`AI_DAILY_LIMIT`, Default 50).
+  Login-Versuche werden je E-Mail gedrosselt (5 Fehlversuche / 15 Minuten).
+- **Datenisolation:** Jede Abfrage in `src/lib/queries.ts` ist auf `user_id`
+  gefiltert. Die 56 Seed-Übungen (`is_custom = 0`) bleiben global geteilt, eigene
+  Übungen gehören dem Ersteller. `plan_exercises` und `set_logs` haben bewusst
+  keine `user_id` — sie hängen immer an einem eigenen Plan bzw. Training.
+- **CSRF** SameSite=Lax plus Origin-Check für POST/PUT/PATCH/DELETE.
+
+### Deployment-Runbook (bei Schema-/Auth-Änderungen)
+
+Reihenfolge ist wichtig: **Migration vor Deploy.** Neue Spalten sind für alten
+Code unsichtbar, aber neuer Code ohne Spalten liefert 500er überall.
+
+```bash
+# 1. Lokal verifizieren
+npm run db:generate && npm run typecheck
+npm run db:migrate:local && npm run dev
+
+# 2. Remote-Migration VOR dem Push
+npm run db:migrate:remote
+# Scheitert das mit D1-Fehler 7403 (bekanntes Problem dieser DB):
+npx wrangler d1 execute fit-man-db --remote --file=./drizzle/0006_add_auth.sql
+npx wrangler d1 execute fit-man-db --remote --command "INSERT INTO d1_migrations (name, applied_at) VALUES ('0006_add_auth.sql', datetime('now'));"
+
+# 3. Deploy = git push main (Workers Builds: nur wrangler deploy, keine Migrationen!)
+
+# 4. Einmalig nach der Auth-Umstellung: Bestandsdaten einem Konto zuordnen.
+#    Erst unter /registrieren registrieren, dann (E-Mail ersetzen):
+npx wrangler d1 execute fit-man-db --remote --command "UPDATE workout_plans SET user_id=(SELECT id FROM users WHERE email='ICH@example.com') WHERE user_id IS NULL;"
+npx wrangler d1 execute fit-man-db --remote --command "UPDATE workout_logs  SET user_id=(SELECT id FROM users WHERE email='ICH@example.com') WHERE user_id IS NULL;"
+npx wrangler d1 execute fit-man-db --remote --command "UPDATE exercises     SET user_id=(SELECT id FROM users WHERE email='ICH@example.com') WHERE user_id IS NULL AND is_custom=1;"
+npx wrangler d1 execute fit-man-db --remote --command "UPDATE recaps        SET user_id=(SELECT id FROM users WHERE email='ICH@example.com') WHERE user_id IS NULL;"
+# Gegenprobe: Muss 0 liefern.
+npx wrangler d1 execute fit-man-db --remote --command "SELECT COUNT(*) FROM workout_logs WHERE user_id IS NULL;"
+```
+
+### Passwort-Reset ohne Mailversand
+
+Es gibt keinen E-Mail-Dienst, also den Reset manuell:
+
+```bash
+node scripts/hash-password.mjs 25000   # fragt das neue Passwort ab, druckt den Hash
+npx wrangler d1 execute fit-man-db --remote --command "UPDATE users SET password_hash='<ausgabe>' WHERE email='ICH@example.com';"
+npx wrangler d1 execute fit-man-db --remote --command "DELETE FROM sessions WHERE user_id=(SELECT id FROM users WHERE email='ICH@example.com');"
+```
+
+Alternativ (solange noch eingeloggt): Profil → Passwort ändern.
+
+> [!NOTE]
+> Ein `DELETE FROM users WHERE id = ?` löscht dank `ON DELETE CASCADE` aller
+> Fremdschlüssel das Konto **inklusive** aller Pläne, Trainings, Sätze, Recaps
+> und eigener Übungen — ein vollständiger Wipe in einer Anweisung.
+
+---
+
 ## Übungsbilder
 
 Jede Standard-Übung hat zwei Fotos aus [free-exercise-db](https://github.com/yuhonas/free-exercise-db)
@@ -89,14 +173,18 @@ Slug und fallen auf die Icon-Kachel zurück.
 
 ## Datenmodell
 
-`src/db/schema.ts` — Migration in `drizzle/0000_init.sql`.
+`src/db/schema.ts` — Migrationen in `drizzle/` (`0000_init.sql` ff.).
 
 ```
-exercises       id · name · category · target_muscle · movement · equipment · image · description · is_custom
-workout_plans   id · name · description · created_at
-plan_exercises  id · plan_id → workout_plans · exercise_id → exercises · sort_order · target_sets
-workout_logs    id · plan_id → workout_plans (nullable) · plan_name · date · duration_seconds · notes
-set_logs        id · workout_log_id → workout_logs · exercise_id → exercises · set_number · reps · weight_kg · completed
+users            id · email (unique) · password_hash · created_at
+sessions         token_hash (PK) · user_id → users (cascade) · expires_at · created_at
+login_attempts   email (PK) · window_start · count
+exercises        id · name · category · target_muscle · movement · equipment · image · description · is_custom · user_id → users (nullable)
+workout_plans    id · name · description · user_id → users (nullable) · created_at
+plan_exercises   id · plan_id → workout_plans · exercise_id → exercises · sort_order · target_sets
+workout_logs     id · plan_id → workout_plans (nullable) · plan_name · user_id → users (nullable) · date · duration_seconds · notes
+set_logs         id · workout_log_id → workout_logs · exercise_id → exercises · set_number · reps · weight_kg · completed
+recaps           id · week_key · user_id → users (nullable) · year · week · headline · summary · highlights_json · tip · created_at · updated_at · UNIQUE(user_id, week_key)
 ```
 
 Zwei bewusste Abweichungen von der Kurzform der Spezifikation:
@@ -277,16 +365,20 @@ src/
     schema.ts            Drizzle-Schema für D1
     index.ts             Drizzle-Client pro Request
   routes/
+    auth.tsx             /login · /registrieren · /logout · /profil
     plans.tsx            /  ·  /plans/new  ·  /plans/:id  ·  /plans/generate
     exercises.tsx        /exercises  ·  POST /exercises  ·  GET /api/exercises
     workout.tsx          /workout/active  ·  POST /api/workouts (Batch-Insert)
     history.tsx          /history  ·  /history/:id
+  middleware/
+    auth.ts              Session laden, Zugriffe schützen, CSRF-Origin-Check
   components/
     layout.tsx           Layout, PageHeader, BottomNav, EmptyState
     icons.tsx            Lucide-Pfade als Inline-SVG
   lib/
+    auth.ts              PBKDF2-Hashing, Session-Tokens, Login-Throttle
     format.ts            Datum, Dauer, Gewicht, IDs
-    queries.ts           Wiederverwendete Abfragen (u. a. Vorwerte je Übung)
+    queries.ts           Wiederverwendete Abfragen (alles nutzer-gefiltert)
   styles/app.css         Tailwind-Quelle (Theme-Tokens, Komponentenklassen)
 public/                  Statische Assets (vom Assets-Handler ausgeliefert)
   app.js                 Client: Tracker, Rest-Timer, Filter, Bottom-Sheets

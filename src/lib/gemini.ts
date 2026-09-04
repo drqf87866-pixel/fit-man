@@ -1,5 +1,5 @@
 import type { Bindings } from '../types';
-import { aiRpmLimit, reserveAiSlot } from './ai-quota';
+import { aiDailyLimit, aiRpmLimit, countUserAiCallsToday, reserveAiSlot } from './ai-quota';
 
 /**
  * Schlanker Gemini-Client für schema-gebundenen JSON-Output.
@@ -27,6 +27,7 @@ import { aiRpmLimit, reserveAiSlot } from './ai-quota';
 export type GeminiErrorCode =
   | 'missing-key'
   | 'rate-limit'
+  | 'daily-limit'
   | 'timeout'
   | 'http'
   | 'empty'
@@ -66,6 +67,8 @@ export type GeminiJsonOptions = {
   timeoutMs?: number;
   /** Maximale Versuche bei transienten Fehlern, Default 3 */
   maxAttempts?: number;
+  /** Aufrufer – aktiviert das Tageslimit je Nutzer (ai_requests.user_id). */
+  userId?: string;
   /** Obergrenze für die Antwort, Default 2048 (unsere Schemata bleiben weit darunter) */
   maxOutputTokens?: number;
   /** Pause zwischen Versuchen in ms, Default 800 */
@@ -82,7 +85,10 @@ const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 /** Führt einen schema-typisierten Gemini-Aufruf aus und parst das JSON-Antwortfeld. */
 export async function geminiJson<T>(
-  env: Pick<Bindings, 'GEMINI_API_KEY' | 'GEMINI_MODEL' | 'GEMINI_RPM' | 'DB'>,
+  env: Pick<
+    Bindings,
+    'GEMINI_API_KEY' | 'GEMINI_MODEL' | 'GEMINI_RPM' | 'DB' | 'AI_DAILY_LIMIT'
+  >,
   opts: GeminiJsonOptions,
 ): Promise<T> {
   if (!env.GEMINI_API_KEY) {
@@ -98,10 +104,24 @@ export async function geminiJson<T>(
 
   const rpmLimit = aiRpmLimit(env.GEMINI_RPM);
 
+  // Tageslimit je Nutzer (eine einzige Zähl-Query vor allen Versuchen) – damit
+  // ein einzelner Registrierter das geteilte Minutenbudget nicht dauerhaft
+  // auffrisst.
+  if (opts.userId) {
+    const daily = aiDailyLimit(env.AI_DAILY_LIMIT);
+    const used = await countUserAiCallsToday(env.DB, opts.userId);
+    if (used >= daily) {
+      throw new GeminiError(
+        'daily-limit',
+        `Tageslimit von ${daily} KI-Anfragen erreicht.`,
+      );
+    }
+  }
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Budget vor dem Call belegen. Kein Retry: das Fenster ist 60 s breit,
     // so lange darf kein Request hängen bleiben.
-    const slot = await reserveAiSlot(env.DB, rpmLimit);
+    const slot = await reserveAiSlot(env.DB, rpmLimit, opts.userId);
     if (!slot.ok) {
       console.warn(
         `[fit-man] Gemini Minutenbudget (${rpmLimit}/min) ausgeschöpft – frei in ${slot.retryAfterSec}s`,
@@ -223,6 +243,8 @@ export function geminiErrorKey(e: GeminiError): string {
       return 'key';
     case 'rate-limit':
       return 'rate';
+    case 'daily-limit':
+      return 'daily';
     case 'timeout':
       return 'timeout';
     case 'empty':
@@ -243,6 +265,7 @@ export const GEMINI_ERROR_TEXTS: Record<string, string> = {
   invalid: 'Die Antwort war nicht verwertbar. Bitte versuche es erneut.',
   key: 'Der KI-Schlüssel ist nicht eingerichtet.',
   rate: 'Das Minutenlimit für KI-Anfragen ist erreicht. Bitte kurz warten und erneut versuchen.',
+  daily: 'Dein Tageslimit für KI-Anfragen ist erreicht. Ab morgen bist du wieder dabei.',
   timeout: 'Der KI-Dienst hat zu lange gebraucht. Bitte erneut versuchen.',
   http: 'Der KI-Dienst ist gerade nicht erreichbar. Bitte später erneut versuchen.',
 };
