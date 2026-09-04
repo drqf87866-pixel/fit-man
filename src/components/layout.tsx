@@ -10,24 +10,32 @@ const NAV: { key: Exclude<NavKey, null>; href: string; label: string; icon: Icon
 ];
 
 /**
- * Prerender der drei Tab-Ziele beim Antippen (Speculation Rules).
+ * Prerender der Tab-Ziele (Speculation Rules).
  *
- * Grund: Wir sind eine klassische MPA – jeder Tab-Wechsel ist eine echte
- * Navigation, und Chrome blendet dafür im Standalone-PWA-Modus oben seinen
- * eigenen Ladebalken ein. Der lässt sich nicht abschalten, wohl aber der
- * Ladevorgang: Ein aktivierter Prerender wird sofort eingeblendet, es gibt
- * keine Netzwerk-Navigation und damit auch keinen Balken.
+ * Wir sind eine klassische MPA – jeder Tab-Wechsel ist eine echte Navigation.
+ * Ein aktivierter Prerender wird dagegen sofort eingeblendet, der Wechsel
+ * kostet also keine Ladezeit mehr.
  *
- * `moderate` löst auf dem Handy beim pointerdown aus – also erst, wenn der
- * Finger den Tab schon berührt. Nur die drei Nav-Ziele stehen in der Liste:
- * alles GET und nebenwirkungsfrei. Browser ohne Speculation Rules (Safari)
- * ignorieren das Script.
+ * `immediate` rendert schon beim Seitenaufbau vor, nicht erst beim Antippen:
+ * Bei `moderate` (pointerdown) war der Prerender bis zum Loslassen des Fingers
+ * nicht fertig – /history zieht Workouts, Stats und Recaps aus D1 – und Chrome
+ * fiel auf eine normale Navigation zurück. Chrome hält für nicht-conservative
+ * Eagerness maximal zwei Prerender gleichzeitig; da eine der drei Seiten immer
+ * die aktuelle ist, bleiben genau zwei Kandidaten und die Grenze passt.
+ *
+ * Preis dafür sind zwei zusätzliche Seitenrenderings (und damit D1-Reads) pro
+ * Seitenaufruf. Nur die Nav-Ziele stehen in der Liste: alles GET und
+ * nebenwirkungsfrei. Browser ohne Speculation Rules (Safari) ignorieren das
+ * Script.
+ *
+ * Offen: Ob damit auch Chromes eigener Ladebalken im Standalone-PWA-Modus
+ * verschwindet, ist unbestätigt – mit `moderate` tat er es nicht.
  */
 const SPECULATION_RULES = JSON.stringify({
   prerender: [
     {
       where: { any_of: NAV.map((item) => ({ href_matches: item.href })) },
-      eagerness: 'moderate',
+      eagerness: 'immediate',
     },
   ],
 });
