@@ -68,6 +68,8 @@ export function getPlanExercises(db: DB, planId: string) {
       name: exercises.name,
       category: exercises.category,
       targetMuscle: exercises.targetMuscle,
+      movement: exercises.movement,
+      equipment: exercises.equipment,
       targetSets: planExercises.targetSets,
       order: planExercises.order,
     })
@@ -116,6 +118,8 @@ export async function getWorkoutDetail(db: DB, id: string) {
       name: exercises.name,
       category: exercises.category,
       targetMuscle: exercises.targetMuscle,
+      movement: exercises.movement,
+      equipment: exercises.equipment,
       setNumber: setLogs.setNumber,
       reps: setLogs.reps,
       weightKg: setLogs.weightKg,

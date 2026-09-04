@@ -5,6 +5,7 @@ import { exercises } from '../db/schema';
 import { countExerciseUsage, listExercises } from '../lib/queries';
 import { newId } from '../lib/format';
 import { CategoryBadge, Layout, PageHeader } from '../components/layout';
+import { TagBadges } from '../components/tags';
 import { Icon } from '../components/icons';
 import type { AppEnv } from '../types';
 
@@ -78,6 +79,7 @@ app.get('/exercises', async (c) => {
             <div class="min-w-0 flex-1">
               <p class="truncate font-semibold">{ex.name}</p>
               <p class="truncate text-xs text-muted">{ex.targetMuscle || '—'}</p>
+              <TagBadges movement={ex.movement} equipment={ex.equipment} />
             </div>
             <CategoryBadge category={ex.category} custom={ex.isCustom} />
             {ex.isCustom ? (

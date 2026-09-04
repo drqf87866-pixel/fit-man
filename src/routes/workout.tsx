@@ -40,6 +40,8 @@ app.get('/workout/active', async (c) => {
       name: it.name,
       category: it.category,
       targetMuscle: it.targetMuscle,
+      movement: it.movement,
+      equipment: it.equipment,
       targetSets: it.targetSets,
     })),
     library: allExercises.map((e) => ({
@@ -47,6 +49,8 @@ app.get('/workout/active', async (c) => {
       name: e.name,
       category: e.category,
       targetMuscle: e.targetMuscle,
+      movement: e.movement,
+      equipment: e.equipment,
     })),
     previous,
   };

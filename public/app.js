@@ -77,6 +77,24 @@
     search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.34-4.34"/>',
   };
 
+  const MOVEMENT_LABELS = { push: 'Push', pull: 'Pull' };
+  const EQUIPMENT_LABELS = { freihantel: 'Freihantel', maschine: 'Maschine', koerpergewicht: 'Körpergewicht' };
+
+  const tagBadges = (movement, equipment) => {
+    const parts = [];
+    if (movement && MOVEMENT_LABELS[movement]) {
+      parts.push(
+        `<span class="rounded-md bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-accent">${esc(MOVEMENT_LABELS[movement])}</span>`,
+      );
+    }
+    if (equipment && EQUIPMENT_LABELS[equipment]) {
+      parts.push(
+        `<span class="rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-muted">${esc(EQUIPMENT_LABELS[equipment])}</span>`,
+      );
+    }
+    return parts.join('');
+  };
+
   const icon = (name, size = 20) =>
     `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0" aria-hidden="true">${ICON[name]}</svg>`;
 
@@ -193,9 +211,11 @@
       filterSel: '[data-plan-filter]',
       itemSel: '[data-plan-item]',
       matches: (item, q, active) => {
-        // Ausgewählte Übungen bleiben sichtbar, damit nichts unbemerkt wegfiltert.
         if (item.querySelector('[data-plan-check]').checked) return true;
-        if (active && item.dataset.category !== active) return false;
+        if (active) {
+          const tags = [item.dataset.category, item.dataset.movement, item.dataset.equipment];
+          if (!tags.includes(active)) return false;
+        }
         return !q || item.dataset.name.includes(q);
       },
     });
@@ -268,6 +288,8 @@
         name: ex.name,
         category: ex.category,
         targetMuscle: ex.targetMuscle ?? '',
+        movement: ex.movement ?? '',
+        equipment: ex.equipment ?? '',
         sets,
       };
     }
@@ -392,6 +414,10 @@
               <p class="text-sm text-muted">
                 ${esc(e.category)}${e.targetMuscle ? ' · ' + esc(e.targetMuscle) : ''}
               </p>
+              ${(() => {
+                const badges = tagBadges(e.movement, e.equipment);
+                return badges ? `<div class="mt-1 flex flex-wrap gap-1">${badges}</div>` : '';
+              })()}
             </div>
             <button type="button" class="btn-ghost !min-w-11 !px-0" data-action="remove-exercise" aria-label="Übung entfernen">
               ${icon('x', 20)}
@@ -575,11 +601,12 @@
             ${payload.library
               .map(
                 (ex) => `
-              <li data-picker-item data-search="${esc((ex.name + ' ' + ex.targetMuscle + ' ' + ex.category).toLowerCase())}">
+              <li data-picker-item data-search="${esc((ex.name + ' ' + ex.targetMuscle + ' ' + ex.category + ' ' + (MOVEMENT_LABELS[ex.movement] ?? '') + ' ' + (EQUIPMENT_LABELS[ex.equipment] ?? '')).toLowerCase())}">
                 <button type="button" class="flex w-full touch items-center gap-3 border-b border-border/60 py-3 text-left" data-picker-pick="${esc(ex.id)}">
                   <span class="min-w-0 flex-1">
                     <span class="block truncate font-semibold">${esc(ex.name)}</span>
                     <span class="block truncate text-xs text-muted">${esc(ex.targetMuscle || ex.category)}</span>
+                    ${tagBadges(ex.movement, ex.equipment) ? `<span class="mt-1 flex flex-wrap gap-1">${tagBadges(ex.movement, ex.equipment)}</span>` : ''}
                   </span>
                   <span class="shrink-0 rounded-md bg-surface-2 px-2 py-0.5 text-[11px] font-semibold text-muted">${esc(ex.category)}</span>
                 </button>

@@ -5,6 +5,8 @@ import { planExercises, workoutPlans } from '../db/schema';
 import { getPlanExercises, listExercises, listPlans, type PlanListRow } from '../lib/queries';
 import { formatRelative, newId } from '../lib/format';
 import { CategoryBadge, EmptyState, Layout, PageHeader } from '../components/layout';
+import { TagBadges } from '../components/tags';
+import { MOVEMENT_LABELS, EQUIPMENT_LABELS } from '../lib/tags';
 import { Icon } from '../components/icons';
 import type { AppEnv } from '../types';
 
@@ -173,6 +175,13 @@ app.get('/plans/new', async (c) => {
                 {cat}
               </button>
             ))}
+            <span class="mx-1 w-px shrink-0 self-stretch bg-border" aria-hidden="true"></span>
+            <button type="button" class="chip" data-plan-filter="push">Push</button>
+            <button type="button" class="chip" data-plan-filter="pull">Pull</button>
+            <span class="mx-1 w-px shrink-0 self-stretch bg-border" aria-hidden="true"></span>
+            <button type="button" class="chip" data-plan-filter="freihantel">Freihantel</button>
+            <button type="button" class="chip" data-plan-filter="maschine">Maschine</button>
+            <button type="button" class="chip" data-plan-filter="koerpergewicht">Körpergewicht</button>
           </div>
 
           <ul class="flex flex-col gap-2" data-plan-list>
@@ -181,7 +190,9 @@ app.get('/plans/new', async (c) => {
                 class="rounded-xl border border-border bg-surface"
                 data-plan-item
                 data-category={ex.category}
-                data-name={ex.name.toLowerCase()}
+                data-movement={ex.movement}
+                data-equipment={ex.equipment}
+                data-name={`${ex.name} ${MOVEMENT_LABELS[ex.movement] ?? ''} ${EQUIPMENT_LABELS[ex.equipment] ?? ''}`.toLowerCase()}
               >
                 <label class="flex touch cursor-pointer items-center gap-3 p-3">
                   <input
@@ -194,6 +205,7 @@ app.get('/plans/new', async (c) => {
                   <span class="min-w-0 flex-1">
                     <span class="block truncate font-medium">{ex.name}</span>
                     <span class="block truncate text-xs text-muted">{ex.targetMuscle}</span>
+                    <TagBadges movement={ex.movement} equipment={ex.equipment} />
                   </span>
                   <CategoryBadge category={ex.category} custom={ex.isCustom} />
                 </label>
@@ -311,6 +323,7 @@ app.get('/plans/:id', async (c) => {
                 <span class="min-w-0 flex-1">
                   <span class="block truncate font-semibold">{it.name}</span>
                   <span class="block truncate text-xs text-muted">{it.targetMuscle}</span>
+                  <TagBadges movement={it.movement} equipment={it.equipment} />
                 </span>
                 <span class="shrink-0 rounded-lg bg-surface-2 px-2.5 py-1 text-xs font-bold text-accent tabular-nums">
                   {it.targetSets} Sätze
