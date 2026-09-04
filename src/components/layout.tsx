@@ -9,6 +9,29 @@ const NAV: { key: Exclude<NavKey, null>; href: string; label: string; icon: Icon
   { key: 'history', href: '/history', label: 'Verlauf', icon: 'history' },
 ];
 
+/**
+ * Prerender der drei Tab-Ziele beim Antippen (Speculation Rules).
+ *
+ * Grund: Wir sind eine klassische MPA – jeder Tab-Wechsel ist eine echte
+ * Navigation, und Chrome blendet dafür im Standalone-PWA-Modus oben seinen
+ * eigenen Ladebalken ein. Der lässt sich nicht abschalten, wohl aber der
+ * Ladevorgang: Ein aktivierter Prerender wird sofort eingeblendet, es gibt
+ * keine Netzwerk-Navigation und damit auch keinen Balken.
+ *
+ * `moderate` löst auf dem Handy beim pointerdown aus – also erst, wenn der
+ * Finger den Tab schon berührt. Nur die drei Nav-Ziele stehen in der Liste:
+ * alles GET und nebenwirkungsfrei. Browser ohne Speculation Rules (Safari)
+ * ignorieren das Script.
+ */
+const SPECULATION_RULES = JSON.stringify({
+  prerender: [
+    {
+      where: { any_of: NAV.map((item) => ({ href_matches: item.href })) },
+      eagerness: 'moderate',
+    },
+  ],
+});
+
 const BottomNav: FC<{ active: NavKey }> = ({ active }) => (
   <nav class="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-surface/95 backdrop-blur-md safe-bottom">
     <ul class="mx-auto flex max-w-lg">
@@ -52,6 +75,12 @@ export const Layout: FC<LayoutProps> = ({ title, active = null, bare = false, ch
       <link rel="stylesheet" href="/styles.css" />
       <link rel="manifest" href="/manifest.webmanifest" />
       <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+      {bare ? null : (
+        <script
+          type="speculationrules"
+          dangerouslySetInnerHTML={{ __html: SPECULATION_RULES }}
+        />
+      )}
     </head>
     <body class={bare ? '' : 'pb-24'}>
       <div class="mx-auto min-h-dvh max-w-lg">{children}</div>
