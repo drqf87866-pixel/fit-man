@@ -187,21 +187,9 @@ const PlanBuilderForm = ({
         />
       </div>
 
-      <div>
-        <label class="label" for="description">
-          Beschreibung (optional)
-        </label>
-        <textarea
-          class="input py-2.5"
-          id="description"
-          name="description"
-          rows={2}
-          maxlength={200}
-          placeholder="Fokus, Split-Tag, Notizen"
-        >
-          {initialDescription}
-        </textarea>
-      </div>
+      {/* Beschreibung wird nicht mehr getippt: KI-Entwurf bzw. Bestand wandert
+          unverändert mit, damit Speichern sie nicht verwirft. */}
+      <input type="hidden" name="description" value={initialDescription} />
 
       <div>
         <div class="mb-2 flex items-baseline justify-between">
@@ -392,7 +380,7 @@ app.post('/plans', async (c) => {
   const form = await c.req.formData();
 
   const name = String(form.get('name') ?? '').trim();
-  const description = String(form.get('description') ?? '').trim();
+  const description = String(form.get('description') ?? '').trim().slice(0, 200);
   const exerciseIds = selectedExerciseIds(form);
 
   if (!name) return c.redirect('/plans/new', 303);
@@ -695,7 +683,7 @@ app.post('/plans/:id', async (c) => {
 
   const form = await c.req.formData();
   const name = String(form.get('name') ?? '').trim();
-  const description = String(form.get('description') ?? '').trim();
+  const description = String(form.get('description') ?? '').trim().slice(0, 200);
   if (!name) return c.redirect(`/plans/${id}/edit`, 303);
 
   // plan_exercises komplett ersetzen: Reihenfolge und Auswahl sind sonst nicht
