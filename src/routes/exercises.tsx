@@ -6,6 +6,7 @@ import { countExerciseUsage, listExercises } from '../lib/queries';
 import { newId } from '../lib/format';
 import { CategoryBadge, Layout, PageHeader } from '../components/layout';
 import { TagBadges } from '../components/tags';
+import { ExerciseThumb } from '../components/exercise-image';
 import { Icon } from '../components/icons';
 import {
   MOVEMENT_LABELS,
@@ -72,9 +73,7 @@ app.get('/exercises', async (c) => {
             data-custom={ex.isCustom ? '1' : '0'}
             data-search={`${ex.name} ${ex.targetMuscle} ${ex.category} ${MOVEMENT_LABELS[ex.movement] ?? ''} ${EQUIPMENT_LABELS[ex.equipment] ?? ''}`.toLowerCase()}
           >
-            <div class="grid size-10 shrink-0 place-items-center rounded-xl bg-surface-2 text-muted">
-              <Icon name={ex.category === 'Cardio' ? 'flame' : 'dumbbell'} size={18} />
-            </div>
+            <ExerciseThumb image={ex.image} category={ex.category} class="size-10 rounded-xl" />
             <div class="min-w-0 flex-1">
               <p class="truncate font-semibold">{ex.name}</p>
               <p class="truncate text-xs text-muted">{ex.targetMuscle || '—'}</p>

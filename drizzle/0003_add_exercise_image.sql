@@ -1,0 +1,1 @@
+ALTER TABLE `exercises` ADD `image` text DEFAULT '' NOT NULL;

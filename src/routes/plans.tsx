@@ -6,6 +6,7 @@ import { getPlanExercises, listExercises, listPlans, type PlanListRow } from '..
 import { formatRelative, newId } from '../lib/format';
 import { CategoryBadge, EmptyState, Layout, PageHeader } from '../components/layout';
 import { TagBadges } from '../components/tags';
+import { ExerciseThumb } from '../components/exercise-image';
 import { MOVEMENT_LABELS, EQUIPMENT_LABELS } from '../lib/tags';
 import { ExerciseFilters } from '../components/filters';
 import { Icon } from '../components/icons';
@@ -226,6 +227,7 @@ const PlanBuilderForm = ({
                     data-plan-check
                     checked={checked}
                   />
+                  <ExerciseThumb image={ex.image} category={ex.category} class="size-10 rounded-lg" />
                   <span class="min-w-0 flex-1">
                     <span class="block truncate font-medium">{ex.name}</span>
                     <span class="block truncate text-xs text-muted">{ex.targetMuscle}</span>
@@ -552,8 +554,11 @@ app.get('/plans/:id', async (c) => {
           <ol class="flex flex-col gap-2">
             {items.map((it, i) => (
               <li class="card flex items-center gap-3 !p-3">
-                <span class="grid size-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-sm font-bold text-muted tabular-nums">
-                  {i + 1}
+                <span class="relative shrink-0">
+                  <ExerciseThumb image={it.image} category={it.category} class="size-11 rounded-lg" iconSize={20} />
+                  <span class="absolute -top-1 -left-1 grid size-5 place-items-center rounded-full bg-surface-2 text-[11px] font-bold text-muted ring-2 ring-surface tabular-nums">
+                    {i + 1}
+                  </span>
                 </span>
                 <span class="min-w-0 flex-1">
                   <span class="block truncate font-semibold">{it.name}</span>

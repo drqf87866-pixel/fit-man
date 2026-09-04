@@ -71,6 +71,7 @@ export function getPlanExercises(db: DB, planId: string) {
       targetMuscle: exercises.targetMuscle,
       movement: exercises.movement,
       equipment: exercises.equipment,
+      image: exercises.image,
       targetSets: planExercises.targetSets,
       order: planExercises.order,
     })

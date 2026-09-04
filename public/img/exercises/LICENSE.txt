@@ -1,0 +1,11 @@
+Die Übungsbilder in diesem Verzeichnis stammen aus dem Datensatz
+
+  free-exercise-db — https://github.com/yuhonas/free-exercise-db
+
+und stehen unter der Unlicense (Public Domain). Es besteht keine Pflicht zur
+Namensnennung; die Quelle wird hier trotzdem festgehalten.
+
+Der Dateiname entspricht der Exercise-ID des Datensatzes; es wurde jeweils
+Bild 0 (Startposition) übernommen. Nachgeladen werden die Bilder mit:
+
+  npm run fetch:images

@@ -42,6 +42,7 @@ app.get('/workout/active', async (c) => {
       targetMuscle: it.targetMuscle,
       movement: it.movement,
       equipment: it.equipment,
+      image: it.image,
       targetSets: it.targetSets,
     })),
     library: allExercises.map((e) => ({
@@ -51,6 +52,7 @@ app.get('/workout/active', async (c) => {
       targetMuscle: e.targetMuscle,
       movement: e.movement,
       equipment: e.equipment,
+      image: e.image,
     })),
     previous,
   };

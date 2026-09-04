@@ -99,6 +99,21 @@
   const icon = (name, size = 20) =>
     `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0" aria-hidden="true">${ICON[name]}</svg>`;
 
+  /**
+   * Vorschaubild einer Übung – Gegenstück zu <ExerciseThumb> in
+   * src/components/exercise-image.tsx. `image` ist der free-exercise-db-Slug,
+   * leer (eigene Übung) => Icon-Kachel.
+   */
+  const exerciseThumb = (image, category, cls, iconSize = 18) =>
+    image
+      ? `<img src="/img/exercises/${esc(image)}.jpg" alt="" loading="lazy" decoding="async"
+             onerror="this.onerror=null;this.src='/img/exercise-fallback.svg'"
+             class="${cls} shrink-0 bg-surface-2 object-cover">`
+      : `<span class="${cls} grid shrink-0 place-items-center bg-surface-2 text-muted">${icon(
+          category === 'Cardio' ? 'flame' : 'dumbbell',
+          iconSize,
+        )}</span>`;
+
   // -------------------------------------------------------------------------
   // Globale Kleinigkeiten: Bestätigungen und Bottom-Sheets
   // -------------------------------------------------------------------------
@@ -313,6 +328,10 @@
       };
     }
 
+    /** exerciseId -> Bild-Slug; der State selbst speichert das Bild nicht. */
+    const IMAGE_BY_ID = Object.fromEntries(payload.library.map((e) => [e.id, e.image || '']));
+    const imageOf = (e) => IMAGE_BY_ID[e.exerciseId] ?? e.image ?? '';
+
     function createState() {
       return {
         v: 1,
@@ -427,6 +446,13 @@
 
       return `
         <main class="px-3 pt-4 pb-40">
+          ${
+            imageOf(e)
+              ? `<img src="/img/exercises/${esc(imageOf(e))}.jpg" alt="" decoding="async"
+                      onerror="this.remove()"
+                      width="850" height="567" class="mb-3 h-48 w-full rounded-2xl bg-surface-2 object-cover">`
+              : ''
+          }
           <div class="mb-3 flex items-start gap-3 px-1">
             <div class="min-w-0 flex-1">
               <h1 class="text-xl font-bold leading-tight">${esc(e.name)}</h1>
@@ -622,6 +648,7 @@
                 (ex) => `
               <li data-picker-item data-search="${esc((ex.name + ' ' + ex.targetMuscle + ' ' + ex.category + ' ' + (MOVEMENT_LABELS[ex.movement] ?? '') + ' ' + (EQUIPMENT_LABELS[ex.equipment] ?? '')).toLowerCase())}">
                 <button type="button" class="flex w-full touch items-center gap-3 border-b border-border/60 py-3 text-left" data-picker-pick="${esc(ex.id)}">
+                  ${exerciseThumb(ex.image, ex.category, 'size-10 rounded-lg')}
                   <span class="min-w-0 flex-1">
                     <span class="block truncate font-semibold">${esc(ex.name)}</span>
                     <span class="block truncate text-xs text-muted">${esc(ex.targetMuscle || ex.category)}</span>

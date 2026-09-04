@@ -24,6 +24,11 @@ export const exercises = sqliteTable(
     movement: text('movement').notNull().default(''),
     /** Freihantel/Maschine/Körpergewicht-Tag */
     equipment: text('equipment').notNull().default(''),
+    /**
+     * Slug des Vorschaubilds aus free-exercise-db, z. B. "Barbell_Full_Squat".
+     * Die Datei liegt unter /img/exercises/<slug>.jpg; leer => Icon-Fallback.
+     */
+    image: text('image').notNull().default(''),
     isCustom: integer('is_custom', { mode: 'boolean' }).notNull().default(false),
   },
   (t) => [index('idx_exercises_category').on(t.category)],

@@ -11,6 +11,7 @@
     "watch:css": "tailwindcss -i ./src/styles/app.css -o ./public/styles.css --watch",
     "deploy": "npm run build:css && wrangler deploy",
     "db:generate": "drizzle-kit generate",
+    "fetch:images": "node scripts/fetch-exercise-images.mjs",
     "db:migrate:local": "wrangler d1 migrations apply fit-man-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply fit-man-db --remote",
     "db:seed:local": "wrangler d1 execute fit-man-db --local --file=./seed.sql",
